@@ -1,28 +1,28 @@
-# VisionOps MVP Implementation Plan
+# VisionOps MVP 구현 계획
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Agent 작업자 필수 지침:** 이 계획을 구현할 때는 `superpowers:subagent-driven-development` 또는 `superpowers:executing-plans`를 사용한다. 각 단계는 체크박스(`- [ ]`)로 추적한다.
 
-**Goal:** Build the VisionOps local-first MVP: project management, YOLO dataset validation, copy-based train/val split, queued YOLO CLI training, live logs/metrics, model artifacts, inference, gallery results, and light/dark theme.
+**목표:** 로컬 우선 VisionOps MVP를 구현한다. 프로젝트 관리, YOLO 데이터셋 검증, 복사 기반 train/val split, YOLO CLI 학습 queue, 실시간 로그/metric, model artifact, inference, 결과 gallery, light/dark theme을 포함한다.
 
-**Architecture:** Use a monorepo with a FastAPI backend, a Python worker, SQLite metadata, local filesystem artifacts, and a React frontend. The backend owns API routes and metadata; the worker executes training/inference jobs through subprocess adapters; the frontend provides dashboard-style project, dataset, training, and inference screens.
+**아키텍처:** monorepo 안에 FastAPI backend, Python worker, SQLite metadata, local filesystem artifact storage, React frontend를 둔다. Backend는 API와 metadata를 관리하고, worker는 subprocess adapter를 통해 training/inference job을 실행하며, frontend는 프로젝트 중심 dashboard UI를 제공한다.
 
-**Tech Stack:** Python 3.11+, FastAPI, SQLAlchemy 2.x, Pydantic, PyYAML, Pillow, pytest, React, TypeScript, Vite, TanStack Query, Recharts, Vitest, Playwright.
+**기술 스택:** Python 3.11+, FastAPI, SQLAlchemy 2.x, Pydantic, PyYAML, Pillow, pytest, React, TypeScript, Vite, TanStack Query, Recharts, Vitest.
 
 ---
 
-## Scope Check
+## 범위 확인
 
-The spec covers several subsystems, but they are one vertical MVP workflow rather than independent products. This plan keeps them in one implementation plan while preserving task boundaries:
+설계서는 여러 하위 시스템을 포함하지만, 모두 하나의 end-to-end MVP workflow를 만들기 위한 구성요소다. 따라서 하나의 구현 계획으로 진행하되 task 경계를 명확히 나눈다.
 
-- Tasks 1-4 establish backend project/dataset foundations.
-- Tasks 5-8 establish job execution, training, logs, and artifacts.
-- Tasks 9-10 establish inference.
-- Tasks 11-14 establish frontend, theme, and user flows.
-- Task 15 performs end-to-end verification and docs cleanup.
+- Task 1-4: backend foundation, project, dataset.
+- Task 5-8: split, job queue, training, monitoring.
+- Task 9-10: inference와 backend smoke 검증.
+- Task 11-14: frontend shell, theme, project/dataset/training/inference UI.
+- Task 15: end-to-end smoke flow와 README.
 
-## File Structure
+## 파일 구조
 
-Create this structure:
+최종 구조는 아래를 기준으로 한다.
 
 ```text
 vision_ops/
@@ -73,10 +73,12 @@ vision_ops/
     src/
       main.tsx
       App.tsx
-      api/client.ts
-      api/types.ts
-      theme/theme.ts
-      theme/ThemeProvider.tsx
+      api/
+        client.ts
+        types.ts
+      theme/
+        theme.ts
+        ThemeProvider.tsx
       components/
         Layout.tsx
         StatusBadge.tsx
@@ -94,15 +96,15 @@ vision_ops/
   README.md
 ```
 
-Boundary rules:
+경계 규칙:
 
-- `backend/app/models.py` contains DB tables only.
-- `backend/app/schemas.py` contains request/response models only.
-- `backend/app/services/*` contains business logic with no FastAPI route decorators.
-- `backend/app/api/routes/*` maps HTTP calls to services.
-- `backend/app/worker.py` is the single-worker job loop.
-- `frontend/src/api/*` is the only frontend code that knows API paths.
-- `frontend/src/theme/*` owns light/dark/system behavior.
+- `backend/app/models.py`: DB table 정의만 둔다.
+- `backend/app/schemas.py`: request/response schema만 둔다.
+- `backend/app/services/*`: business logic을 둔다. FastAPI route decorator를 넣지 않는다.
+- `backend/app/api/routes/*`: HTTP endpoint와 service 연결만 담당한다.
+- `backend/app/worker.py`: 단일 worker loop와 job handler dispatch만 담당한다.
+- `frontend/src/api/*`: frontend에서 API path를 아는 유일한 위치다.
+- `frontend/src/theme/*`: light/dark/system theme 동작을 담당한다.
 
 ---
 
@@ -123,9 +125,9 @@ Boundary rules:
 - Create: `frontend/src/App.tsx`
 - Create: `frontend/src/styles.css`
 
-- [ ] **Step 1: Create scaffold files**
+- [ ] **Step 1: 기본 파일 생성**
 
-Create `.gitignore`:
+`.gitignore`:
 
 ```gitignore
 .DS_Store
@@ -141,7 +143,7 @@ vision_ops_data/
 *.log
 ```
 
-Create `backend/pyproject.toml`:
+`backend/pyproject.toml`:
 
 ```toml
 [project]
@@ -175,7 +177,7 @@ line-length = 100
 target-version = "py311"
 ```
 
-Create `backend/app/main.py`:
+`backend/app/main.py`:
 
 ```python
 from fastapi import FastAPI
@@ -188,7 +190,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 ```
 
-Create `backend/tests/conftest.py`:
+`backend/tests/conftest.py`:
 
 ```python
 import pytest
@@ -202,7 +204,7 @@ def client() -> TestClient:
     return TestClient(app)
 ```
 
-Create `frontend/package.json`:
+`frontend/package.json`:
 
 ```json
 {
@@ -230,7 +232,7 @@ Create `frontend/package.json`:
 }
 ```
 
-Create `frontend/src/App.tsx`:
+`frontend/src/App.tsx`:
 
 ```tsx
 export default function App() {
@@ -238,29 +240,37 @@ export default function App() {
 }
 ```
 
-- [ ] **Step 2: Install dependencies**
+- [ ] **Step 2: 의존성 설치**
 
 Run:
 
 ```bash
-cd backend && python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
-cd ../frontend && npm install
+cd backend
+python -m venv .venv
+. .venv/bin/activate
+pip install -e ".[dev]"
+cd ../frontend
+npm install
 ```
 
-Expected: Python and Node dependencies install without errors.
+Expected: Python/Node dependency 설치가 오류 없이 끝난다.
 
-- [ ] **Step 3: Verify scaffold**
+- [ ] **Step 3: scaffold 검증**
 
 Run:
 
 ```bash
-cd backend && . .venv/bin/activate && pytest -q
-cd ../frontend && npm test && npm run build
+cd backend
+. .venv/bin/activate
+pytest -q
+cd ../frontend
+npm test
+npm run build
 ```
 
-Expected: Backend tests pass or report no tests collected; frontend test/build passes after minimal files are complete.
+Expected: backend test는 pass 또는 no tests collected 상태, frontend test/build는 pass.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: commit**
 
 ```bash
 git add .gitignore README.md backend frontend
@@ -269,7 +279,7 @@ git commit -m "chore: scaffold VisionOps app"
 
 ---
 
-### Task 2: Backend Settings, Storage, and Database Models
+### Task 2: Backend 설정, Storage, DB 모델
 
 **Files:**
 - Create: `backend/app/core/__init__.py`
@@ -279,12 +289,11 @@ git commit -m "chore: scaffold VisionOps app"
 - Create: `backend/app/services/__init__.py`
 - Create: `backend/app/services/storage.py`
 - Modify: `backend/app/main.py`
-- Modify: `backend/tests/conftest.py`
 - Create: `backend/tests/test_storage_and_db.py`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: 실패하는 테스트 작성**
 
-Create `backend/tests/test_storage_and_db.py`:
+`backend/tests/test_storage_and_db.py`:
 
 ```python
 from app.db import Base, engine
@@ -309,14 +318,16 @@ def test_models_create_tables():
 Run:
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_storage_and_db.py -q
+cd backend
+. .venv/bin/activate
+pytest tests/test_storage_and_db.py -q
 ```
 
-Expected: FAIL because `app.db`, `app.models`, and `StoragePaths` do not exist.
+Expected: `app.db`, `app.models`, `StoragePaths`가 없어서 FAIL.
 
-- [ ] **Step 2: Implement settings and DB**
+- [ ] **Step 2: settings와 DB 구현**
 
-Create `backend/app/core/config.py`:
+`backend/app/core/config.py`:
 
 ```python
 from pathlib import Path
@@ -334,7 +345,7 @@ class Settings(BaseSettings):
 settings = Settings()
 ```
 
-Create `backend/app/db.py`:
+`backend/app/db.py`:
 
 ```python
 from collections.abc import Generator
@@ -360,138 +371,34 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 ```
 
-Create `backend/app/models.py`:
+- [ ] **Step 3: SQLAlchemy model 구현**
 
-```python
-from datetime import datetime
+`backend/app/models.py`에는 설계서의 엔티티를 그대로 만든다.
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+필수 table:
 
-from app.db import Base
+- `Project`
+- `Dataset`
+- `DatasetSplit`
+- `TrainingRun`
+- `Job`
+- `ModelArtifact`
+- `InferenceRun`
+- `InferencePrediction`
 
+필수 규칙:
 
-class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
+- id는 `String` primary key.
+- `config`, `summary`, `class_names`, `prediction_json` 계열은 `JSON`.
+- 시간 필드는 `DateTime(timezone=True)`.
+- `Project.task_type` 기본값은 `detection`.
+- `Dataset.format` 기본값은 `yolo`.
+- `TrainingRun.trainer` 기본값은 `ultralytics`.
+- run/job status 기본값은 `queued`.
 
+- [ ] **Step 4: storage path 구현**
 
-class Project(TimestampMixin, Base):
-    __tablename__ = "projects"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    task_type: Mapped[str] = mapped_column(String, default="detection", nullable=False)
-
-
-class Dataset(TimestampMixin, Base):
-    __tablename__ = "datasets"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    source_path: Mapped[str] = mapped_column(Text, nullable=False)
-    format: Mapped[str] = mapped_column(String, default="yolo", nullable=False)
-    class_names: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
-    image_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    label_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    validation_status: Mapped[str] = mapped_column(String, default="unknown", nullable=False)
-    validation_summary: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-
-
-class DatasetSplit(TimestampMixin, Base):
-    __tablename__ = "dataset_splits"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id"), nullable=False)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    train_ratio: Mapped[float] = mapped_column(Float, nullable=False)
-    val_ratio: Mapped[float] = mapped_column(Float, nullable=False)
-    seed: Mapped[int] = mapped_column(Integer, nullable=False)
-    train_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    val_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    split_path: Mapped[str] = mapped_column(Text, nullable=False)
-    dataset_yaml_path: Mapped[str] = mapped_column(Text, nullable=False)
-
-
-class TrainingRun(TimestampMixin, Base):
-    __tablename__ = "training_runs"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
-    dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id"), nullable=False)
-    split_id: Mapped[str] = mapped_column(ForeignKey("dataset_splits.id"), nullable=False)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    model_name: Mapped[str] = mapped_column(String, nullable=False)
-    trainer: Mapped[str] = mapped_column(String, default="ultralytics", nullable=False)
-    status: Mapped[str] = mapped_column(String, default="queued", nullable=False)
-    config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    metrics_summary: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    log_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class Job(TimestampMixin, Base):
-    __tablename__ = "jobs"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    type: Mapped[str] = mapped_column(String, nullable=False)
-    target_id: Mapped[str] = mapped_column(String, nullable=False)
-    status: Mapped[str] = mapped_column(String, default="queued", nullable=False)
-    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
-    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class ModelArtifact(TimestampMixin, Base):
-    __tablename__ = "model_artifacts"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    training_run_id: Mapped[str] = mapped_column(ForeignKey("training_runs.id"), nullable=False)
-    kind: Mapped[str] = mapped_column(String, nullable=False)
-    path: Mapped[str] = mapped_column(Text, nullable=False)
-    metrics_snapshot: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-
-
-class InferenceRun(TimestampMixin, Base):
-    __tablename__ = "inference_runs"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
-    model_artifact_id: Mapped[str] = mapped_column(ForeignKey("model_artifacts.id"), nullable=False)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    input_type: Mapped[str] = mapped_column(String, nullable=False)
-    input_path: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String, default="queued", nullable=False)
-    config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    output_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    prediction_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class InferencePrediction(TimestampMixin, Base):
-    __tablename__ = "inference_predictions"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    inference_run_id: Mapped[str] = mapped_column(ForeignKey("inference_runs.id"), nullable=False)
-    image_path: Mapped[str] = mapped_column(Text, nullable=False)
-    output_image_path: Mapped[str] = mapped_column(Text, nullable=False)
-    prediction_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    class_names: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
-    max_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-```
-
-- [ ] **Step 3: Implement storage paths**
-
-Create `backend/app/services/storage.py`:
+`backend/app/services/storage.py`:
 
 ```python
 from dataclasses import dataclass
@@ -534,9 +441,9 @@ class StoragePaths:
         return path
 ```
 
-- [ ] **Step 4: Initialize tables on startup**
+- [ ] **Step 5: startup에서 table 생성**
 
-Modify `backend/app/main.py`:
+`backend/app/main.py`:
 
 ```python
 from fastapi import FastAPI
@@ -556,17 +463,19 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 ```
 
-- [ ] **Step 5: Verify**
+- [ ] **Step 6: 검증**
 
 Run:
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_storage_and_db.py -q
+cd backend
+. .venv/bin/activate
+pytest tests/test_storage_and_db.py -q
 ```
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: commit**
 
 ```bash
 git add backend/app backend/tests/test_storage_and_db.py
@@ -578,28 +487,30 @@ git commit -m "feat: add backend database and storage foundations"
 ### Task 3: Project CRUD API
 
 **Files:**
-- Modify: `backend/app/schemas.py`
+- Create/Modify: `backend/app/schemas.py`
 - Create: `backend/app/api/routes/projects.py`
 - Modify: `backend/app/main.py`
 - Create: `backend/tests/test_projects_api.py`
 
-- [ ] **Step 1: Write failing API tests**
+- [ ] **Step 1: 실패하는 API 테스트 작성**
 
-Create tests for:
-
-- `POST /api/projects` creates a project.
-- `GET /api/projects` lists projects.
-- `GET /api/projects/{project_id}` returns one project.
-
-Use this assertion shape:
+`backend/tests/test_projects_api.py`:
 
 ```python
-def test_create_and_get_project(client):
-    created = client.post("/api/projects", json={"name": "factory", "description": "defects"})
+def test_create_list_and_get_project(client):
+    created = client.post(
+        "/api/projects",
+        json={"name": "factory", "description": "defects"},
+    )
     assert created.status_code == 201
     body = created.json()
     assert body["name"] == "factory"
+    assert body["description"] == "defects"
     assert body["task_type"] == "detection"
+
+    listed = client.get("/api/projects")
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == body["id"]
 
     fetched = client.get(f"/api/projects/{body['id']}")
     assert fetched.status_code == 200
@@ -609,14 +520,16 @@ def test_create_and_get_project(client):
 Run:
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_projects_api.py -q
+cd backend
+. .venv/bin/activate
+pytest tests/test_projects_api.py -q
 ```
 
-Expected: FAIL with 404 for `/api/projects`.
+Expected: `/api/projects` route가 없어서 FAIL.
 
-- [ ] **Step 2: Implement schemas**
+- [ ] **Step 2: schema 구현**
 
-Create `ProjectCreate` and `ProjectRead` in `backend/app/schemas.py`:
+`backend/app/schemas.py`에 `ProjectCreate`, `ProjectRead`를 만든다.
 
 ```python
 from datetime import datetime
@@ -640,20 +553,24 @@ class ProjectRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 ```
 
-- [ ] **Step 3: Implement route**
+- [ ] **Step 3: route 구현**
 
-Create `backend/app/api/routes/projects.py` with:
+`backend/app/api/routes/projects.py`:
 
 - `router = APIRouter(prefix="/api/projects", tags=["projects"])`
-- `create_project`
-- `list_projects`
-- `get_project`
+- `POST /`
+- `GET /`
+- `GET /{project_id}`
 
-Use `uuid.uuid4().hex` for ids and `StoragePaths(settings.artifact_root).project_dir(project.id)` after insert.
+구현 규칙:
 
-- [ ] **Step 4: Register route**
+- id는 `uuid.uuid4().hex`.
+- 생성 직후 `StoragePaths(settings.artifact_root).project_dir(project.id)` 호출.
+- 없는 project 조회는 404.
 
-Modify `backend/app/main.py` to include:
+- [ ] **Step 4: route 등록**
+
+`backend/app/main.py`:
 
 ```python
 from app.api.routes import projects
@@ -661,26 +578,19 @@ from app.api.routes import projects
 app.include_router(projects.router)
 ```
 
-- [ ] **Step 5: Verify**
-
-Run:
+- [ ] **Step 5: 검증과 commit**
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_projects_api.py -q
-```
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
+cd backend
+. .venv/bin/activate
+pytest tests/test_projects_api.py -q
 git add backend/app backend/tests/test_projects_api.py
 git commit -m "feat: add project CRUD API"
 ```
 
 ---
 
-### Task 4: YOLO Dataset Registration and Validation
+### Task 4: YOLO Dataset 등록과 검증
 
 **Files:**
 - Modify: `backend/app/schemas.py`
@@ -689,18 +599,11 @@ git commit -m "feat: add project CRUD API"
 - Modify: `backend/app/main.py`
 - Create: `backend/tests/test_dataset_validation.py`
 
-- [ ] **Step 1: Write failing service tests**
+- [ ] **Step 1: 실패하는 service 테스트 작성**
 
-Create a temporary YOLO dataset:
+테스트 helper는 `Pillow`로 작은 이미지를 생성한다.
 
-```text
-dataset/
-  data.yaml
-  images/a.jpg
-  labels/a.txt
-```
-
-Test:
+필수 테스트:
 
 ```python
 def test_valid_yolo_dataset(tmp_path):
@@ -710,11 +613,8 @@ def test_valid_yolo_dataset(tmp_path):
     assert result.image_count == 1
     assert result.label_count == 1
     assert result.class_names == ["defect"]
-```
 
-Also test missing `data.yaml`:
 
-```python
 def test_dataset_requires_data_yaml(tmp_path):
     (tmp_path / "images").mkdir()
     (tmp_path / "labels").mkdir()
@@ -726,41 +626,43 @@ def test_dataset_requires_data_yaml(tmp_path):
 Run:
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_dataset_validation.py -q
+cd backend
+. .venv/bin/activate
+pytest tests/test_dataset_validation.py -q
 ```
 
-Expected: FAIL because validation service does not exist.
+Expected: validation service가 없어서 FAIL.
 
-- [ ] **Step 2: Implement validation service**
+- [ ] **Step 2: validation service 구현**
 
-Create `backend/app/services/dataset_validation.py` with:
+`backend/app/services/dataset_validation.py`:
 
 - `ValidationResult` dataclass.
 - `load_class_names(dataset_root: Path) -> list[str]`.
 - `validate_yolo_label_line(line: str, class_count: int) -> str | None`.
 - `validate_yolo_dataset(dataset_root: Path) -> ValidationResult`.
 
-Implementation requirements:
+구현 규칙:
 
-- Require `data.yaml`.
-- Require `names`.
-- Accept `names: ["a", "b"]` and `names: {0: "a", 1: "b"}`.
-- Require `images/` and `labels/`.
-- Count image files with `jpg`, `jpeg`, `png`, `bmp`, `webp`.
-- Allow empty labels.
-- Report missing label files as warnings, not errors.
-- Report malformed label rows as errors.
-- Report class ids outside `names` range as errors.
+- `data.yaml` 필수.
+- `data.yaml` 안의 `names` 필수.
+- `names: ["a", "b"]`와 `names: {0: "a", 1: "b"}` 모두 허용.
+- `images/`, `labels/` 필수.
+- 이미지 확장자는 `jpg`, `jpeg`, `png`, `bmp`, `webp`.
+- 빈 label file은 negative image로 허용.
+- label file 누락은 warning.
+- label row 형식 오류는 error.
+- class id가 `names` 범위를 벗어나면 error.
 
-- [ ] **Step 3: Add dataset API**
+- [ ] **Step 3: dataset API 구현**
 
-Create endpoints:
+Endpoints:
 
 - `POST /api/projects/{project_id}/datasets`
 - `GET /api/projects/{project_id}/datasets`
 - `GET /api/projects/{project_id}/datasets/{dataset_id}`
 
-Request body:
+Create body:
 
 ```json
 {
@@ -769,32 +671,25 @@ Request body:
 }
 ```
 
-Behavior:
+동작:
 
-- Validate immediately.
-- Store validation summary in DB.
-- Store class names, image count, label count, validation status.
+- 등록 즉시 validation 실행.
+- validation summary를 DB에 저장.
+- class names, image count, label count, validation status 저장.
 
-- [ ] **Step 4: Verify**
-
-Run:
+- [ ] **Step 4: 검증과 commit**
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_dataset_validation.py -q
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
+cd backend
+. .venv/bin/activate
+pytest tests/test_dataset_validation.py -q
 git add backend/app backend/tests/test_dataset_validation.py
 git commit -m "feat: add YOLO dataset validation"
 ```
 
 ---
 
-### Task 5: Copy-Based Train/Val Split
+### Task 5: 복사 기반 Train/Val Split
 
 **Files:**
 - Modify: `backend/app/schemas.py`
@@ -803,21 +698,7 @@ git commit -m "feat: add YOLO dataset validation"
 - Modify: `backend/app/main.py`
 - Create: `backend/tests/test_split_service.py`
 
-- [ ] **Step 1: Write failing split tests**
-
-Test that a 4-image dataset with seed `42` creates this structure:
-
-```text
-split/
-  images/train/
-  images/val/
-  labels/train/
-  labels/val/
-  data.yaml
-  split_manifest.json
-```
-
-Assertion:
+- [ ] **Step 1: 실패하는 split 테스트 작성**
 
 ```python
 def test_create_copy_split(tmp_path):
@@ -832,6 +713,8 @@ def test_create_copy_split(tmp_path):
     )
     assert len(list((split_root / "images" / "train").glob("*.jpg"))) == 3
     assert len(list((split_root / "images" / "val").glob("*.jpg"))) == 1
+    assert (split_root / "labels" / "train").exists()
+    assert (split_root / "labels" / "val").exists()
     assert (split_root / "data.yaml").exists()
     assert (split_root / "split_manifest.json").exists()
     assert manifest["seed"] == 42
@@ -840,32 +723,35 @@ def test_create_copy_split(tmp_path):
 Run:
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_split_service.py -q
+cd backend
+. .venv/bin/activate
+pytest tests/test_split_service.py -q
 ```
 
-Expected: FAIL because split service does not exist.
+Expected: split service가 없어서 FAIL.
 
-- [ ] **Step 2: Implement split service**
+- [ ] **Step 2: split service 구현**
 
-Create `backend/app/services/split.py`:
+`backend/app/services/split.py`:
 
-- Load source `data.yaml`.
-- Collect images.
-- Shuffle with `random.Random(seed)`.
-- Compute `train_count = round(total * train_ratio)` and put the remainder in val.
-- Copy images and matching labels.
-- Create empty label files for unlabeled negative images.
-- Write split `data.yaml` with `path`, `train: images/train`, `val: images/val`, and copied `names`.
-- Write `split_manifest.json`.
+- source `data.yaml`을 읽는다.
+- 이미지 목록을 수집한다.
+- `random.Random(seed)`로 shuffle한다.
+- `train_count = round(total * train_ratio)`.
+- 나머지는 val로 둔다.
+- 이미지와 matching label을 복사한다.
+- label이 없는 negative image는 빈 label file을 생성한다.
+- split `data.yaml`을 생성한다.
+- `split_manifest.json`을 생성한다.
 
-- [ ] **Step 3: Add split API**
+- [ ] **Step 3: split API 구현**
 
-Create endpoints:
+Endpoints:
 
 - `POST /api/projects/{project_id}/datasets/{dataset_id}/splits`
 - `GET /api/projects/{project_id}/datasets/{dataset_id}/splits`
 
-Request body:
+Create body:
 
 ```json
 {
@@ -876,41 +762,32 @@ Request body:
 }
 ```
 
-Behavior:
+규칙:
 
-- Reject if ratios do not sum to `1.0`.
-- Reject if dataset validation status is not `valid`.
-- Store counts and paths in `DatasetSplit`.
+- ratio 합이 `1.0`이 아니면 400.
+- dataset validation status가 `valid`가 아니면 400.
+- split path와 `data.yaml` path를 `DatasetSplit`에 저장.
 
-- [ ] **Step 4: Verify**
-
-Run:
+- [ ] **Step 4: 검증과 commit**
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_split_service.py -q
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
+cd backend
+. .venv/bin/activate
+pytest tests/test_split_service.py -q
 git add backend/app backend/tests/test_split_service.py
 git commit -m "feat: add copy based dataset splits"
 ```
 
 ---
 
-### Task 6: Job Queue and Worker Loop
+### Task 6: Job Queue와 Worker Loop
 
 **Files:**
-- Modify: `backend/app/services/jobs.py`
+- Create: `backend/app/services/jobs.py`
 - Create: `backend/app/worker.py`
 - Create: `backend/tests/test_jobs.py`
 
-- [ ] **Step 1: Write failing tests**
-
-Test:
+- [ ] **Step 1: 실패하는 queue 테스트 작성**
 
 ```python
 def test_queue_claims_oldest_job(db_session):
@@ -925,25 +802,33 @@ def test_queue_claims_oldest_job(db_session):
 Run:
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_jobs.py -q
+cd backend
+. .venv/bin/activate
+pytest tests/test_jobs.py -q
 ```
 
-Expected: FAIL because job service does not exist.
+Expected: job service가 없어서 FAIL.
 
-- [ ] **Step 2: Implement job service**
+- [ ] **Step 2: job service 구현**
 
-Create `backend/app/services/jobs.py`:
+`backend/app/services/jobs.py`:
 
-- `enqueue_job(db, job_type, target_id, priority=100)`.
-- `claim_next_job(db)`.
-- `complete_job(db, job, status="completed")`.
-- `fail_job(db, job, message)`.
+- `enqueue_job(db, job_type, target_id, priority=100)`
+- `claim_next_job(db)`
+- `complete_job(db, job, status="completed")`
+- `fail_job(db, job, message)`
 
-Use `queued`, `running`, `completed`, `failed`, and `cancelled`.
+상태값:
 
-- [ ] **Step 3: Implement worker loop**
+- `queued`
+- `running`
+- `completed`
+- `failed`
+- `cancelled`
 
-Create `backend/app/worker.py`:
+- [ ] **Step 3: worker loop 구현**
+
+`backend/app/worker.py`:
 
 ```python
 import time
@@ -967,26 +852,19 @@ def run_worker(poll_seconds: float = 1.0) -> None:
             process_job(db, job)
 ```
 
-- [ ] **Step 4: Verify**
-
-Run:
+- [ ] **Step 4: 검증과 commit**
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_jobs.py -q
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
+cd backend
+. .venv/bin/activate
+pytest tests/test_jobs.py -q
 git add backend/app backend/tests/test_jobs.py
 git commit -m "feat: add local job queue"
 ```
 
 ---
 
-### Task 7: Training Run API and Ultralytics CLI Adapter
+### Task 7: Training Run API와 Ultralytics CLI Adapter
 
 **Files:**
 - Modify: `backend/app/schemas.py`
@@ -997,11 +875,11 @@ git commit -m "feat: add local job queue"
 - Modify: `backend/app/main.py`
 - Create: `backend/tests/test_training_service.py`
 
-- [ ] **Step 1: Write failing adapter test with fake CLI**
+- [ ] **Step 1: fake CLI 기반 실패 테스트 작성**
 
-Create a fake executable script in a temp directory that writes `results.csv`, `weights/best.pt`, and `weights/last.pt`.
+실제 GPU나 Ultralytics 설치 없이 테스트하기 위해 temp directory에 fake `yolo` executable을 만든다. fake executable은 `results.csv`, `weights/best.pt`, `weights/last.pt`를 생성한다.
 
-Expected test shape:
+핵심 assertion:
 
 ```python
 def test_training_adapter_runs_cli_and_collects_artifacts(tmp_path):
@@ -1012,54 +890,44 @@ def test_training_adapter_runs_cli_and_collects_artifacts(tmp_path):
         model_name="yolo11n.pt",
         data_yaml=tmp_path / "data.yaml",
         run_dir=run_dir,
-        config={"epochs": 1, "imgsz": 640, "batch": 1, "lr0": 0.01, "device": "cpu"},
+        config={"epochs": 1, "imgsz": 640, "batch": 1, "learning_rate": 0.01, "patience": 10, "device": "cpu"},
     )
     assert result.exit_code == 0
     assert (run_dir / "logs" / "stdout.log").exists()
     assert (run_dir / "weights" / "best.pt").exists()
 ```
 
-Run:
+- [ ] **Step 2: training subprocess service 구현**
 
-```bash
-cd backend && . .venv/bin/activate && pytest tests/test_training_service.py -q
-```
-
-Expected: FAIL because training service does not exist.
-
-- [ ] **Step 2: Implement training subprocess service**
-
-Create `backend/app/services/training.py`:
+`backend/app/services/training.py`:
 
 - `TrainingResult` dataclass.
 - `build_yolo_train_command(...) -> list[str]`.
 - `run_yolo_training(...) -> TrainingResult`.
-- Use `subprocess.Popen`.
-- Stream stdout/stderr to `logs/stdout.log`.
-- Set CLI args:
-  - `detect`
-  - `train`
-  - `model=<model>.pt`
-  - `data=<data_yaml>`
-  - `epochs=<epochs>`
-  - `imgsz=<imgsz>`
-  - `batch=<batch>`
-  - `lr0=<learning_rate>`
-  - `patience=<patience>`
-  - `device=<device>`
-  - `project=<run_parent>`
-  - `name=<run_name>`
-  - `exist_ok=True`
 
-- [ ] **Step 3: Implement metrics parser**
+CLI argument:
 
-Create `backend/app/services/metrics.py`:
+```bash
+yolo detect train model=<model>.pt data=<data_yaml> epochs=<epochs> imgsz=<imgsz> batch=<batch> lr0=<learning_rate> patience=<patience> device=<device> project=<run_parent> name=<run_name> exist_ok=True
+```
 
-- `read_results_csv(path: Path) -> list[dict]`.
-- `summarize_metrics(rows: list[dict]) -> dict`.
-- Summary includes last epoch, best mAP50 if available, best precision if available, best recall if available.
+stdout/stderr는 `logs/stdout.log`에 append한다.
 
-- [ ] **Step 4: Add training API**
+- [ ] **Step 3: metrics parser 구현**
+
+`backend/app/services/metrics.py`:
+
+- `read_results_csv(path: Path) -> list[dict]`
+- `summarize_metrics(rows: list[dict]) -> dict`
+
+summary에는 가능한 경우 아래 값을 넣는다.
+
+- last epoch
+- best mAP50
+- best precision
+- best recall
+
+- [ ] **Step 4: training API 구현**
 
 Endpoints:
 
@@ -1067,7 +935,7 @@ Endpoints:
 - `GET /api/projects/{project_id}/training-runs`
 - `GET /api/projects/{project_id}/training-runs/{run_id}`
 
-Training create body:
+Create body:
 
 ```json
 {
@@ -1085,52 +953,43 @@ Training create body:
 }
 ```
 
-Behavior:
+동작:
 
-- Create `TrainingRun` with status `queued`.
-- Create `Job` with type `training`.
-- Return the created run.
+- `TrainingRun`을 `queued`로 생성.
+- `Job`을 type `training`으로 생성.
+- 생성된 run 반환.
 
-- [ ] **Step 5: Wire worker training handler**
+- [ ] **Step 5: worker training handler 연결**
 
-Modify `backend/app/worker.py`:
+`backend/app/worker.py`:
 
-- If job type is `training`, load `TrainingRun`, `DatasetSplit`, and run directory.
-- Mark run `running`.
-- Execute `run_yolo_training`.
-- Parse metrics.
-- Register `ModelArtifact` records for `best.pt` and `last.pt`.
-- Mark run `completed` or `failed`.
+- job type이 `training`이면 `TrainingRun`, `DatasetSplit`을 load.
+- run을 `running`으로 변경.
+- `run_yolo_training` 실행.
+- metrics summary parse.
+- `best.pt`, `last.pt`를 `ModelArtifact`로 등록.
+- 성공 시 `completed`, 실패 시 `failed`.
 
-- [ ] **Step 6: Verify**
-
-Run:
+- [ ] **Step 6: 검증과 commit**
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_training_service.py -q
-```
-
-Expected: PASS.
-
-- [ ] **Step 7: Commit**
-
-```bash
+cd backend
+. .venv/bin/activate
+pytest tests/test_training_service.py -q
 git add backend/app backend/tests/test_training_service.py
 git commit -m "feat: add queued YOLO training"
 ```
 
 ---
 
-### Task 8: Training Logs, Metrics, and Artifacts API
+### Task 8: Training Logs, Metrics, Artifacts API
 
 **Files:**
 - Create: `backend/app/services/logs.py`
 - Modify: `backend/app/api/routes/training.py`
 - Create: `backend/tests/test_training_logs_metrics.py`
 
-- [ ] **Step 1: Write failing tests**
-
-Test:
+- [ ] **Step 1: 실패하는 log service 테스트 작성**
 
 ```python
 def test_tail_log_reads_last_lines(tmp_path):
@@ -1139,52 +998,37 @@ def test_tail_log_reads_last_lines(tmp_path):
     assert tail_log(path, max_lines=2) == ["b", "c"]
 ```
 
-Run:
+- [ ] **Step 2: log service 구현**
 
-```bash
-cd backend && . .venv/bin/activate && pytest tests/test_training_logs_metrics.py -q
-```
+`backend/app/services/logs.py`:
 
-Expected: FAIL because `tail_log` does not exist.
+- `tail_log(path: Path, max_lines: int = 200) -> list[str]`
+- `stream_log(path: Path, poll_seconds: float = 0.5)` SSE generator
 
-- [ ] **Step 2: Implement log service**
+- [ ] **Step 3: monitoring endpoint 구현**
 
-Create `backend/app/services/logs.py`:
-
-- `tail_log(path: Path, max_lines: int = 200) -> list[str]`.
-- `stream_log(path: Path, poll_seconds: float = 0.5)` generator for SSE.
-
-- [ ] **Step 3: Add API endpoints**
-
-Add to training router:
+Training router에 추가:
 
 - `GET /api/projects/{project_id}/training-runs/{run_id}/logs?tail=200`
 - `GET /api/projects/{project_id}/training-runs/{run_id}/logs/stream`
 - `GET /api/projects/{project_id}/training-runs/{run_id}/metrics`
 - `GET /api/projects/{project_id}/training-runs/{run_id}/artifacts`
 
-SSE endpoint returns `text/event-stream`.
+SSE endpoint는 `text/event-stream`을 반환한다.
 
-- [ ] **Step 4: Verify**
-
-Run:
+- [ ] **Step 4: 검증과 commit**
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_training_logs_metrics.py -q
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
+cd backend
+. .venv/bin/activate
+pytest tests/test_training_logs_metrics.py -q
 git add backend/app backend/tests/test_training_logs_metrics.py
 git commit -m "feat: add training monitoring APIs"
 ```
 
 ---
 
-### Task 9: Inference Adapter and Inference API
+### Task 9: Inference Adapter와 Inference API
 
 **Files:**
 - Modify: `backend/app/schemas.py`
@@ -1194,11 +1038,11 @@ git commit -m "feat: add training monitoring APIs"
 - Modify: `backend/app/main.py`
 - Create: `backend/tests/test_inference_service.py`
 
-- [ ] **Step 1: Write failing inference service test**
+- [ ] **Step 1: fake CLI 기반 실패 테스트 작성**
 
-Use a fake YOLO executable that creates output images and a JSON file.
+fake `yolo detect predict` executable로 output image와 label output을 생성한다.
 
-Test:
+핵심 assertion:
 
 ```python
 def test_inference_adapter_creates_outputs(tmp_path):
@@ -1215,28 +1059,21 @@ def test_inference_adapter_creates_outputs(tmp_path):
     assert output_dir.exists()
 ```
 
-Run:
+- [ ] **Step 2: inference subprocess service 구현**
 
-```bash
-cd backend && . .venv/bin/activate && pytest tests/test_inference_service.py -q
-```
-
-Expected: FAIL because inference service does not exist.
-
-- [ ] **Step 2: Implement inference subprocess service**
-
-Create `backend/app/services/inference.py`:
+`backend/app/services/inference.py`:
 
 - `InferenceResult` dataclass.
 - `build_yolo_predict_command(...) -> list[str]`.
 - `run_yolo_inference(...) -> InferenceResult`.
-- CLI command shape:
+
+CLI shape:
 
 ```bash
 yolo detect predict model=<best.pt> source=<input_path> conf=<conf> imgsz=<imgsz> project=<parent> name=<run_id> save=True save_txt=True save_conf=True exist_ok=True
 ```
 
-- [ ] **Step 3: Add inference API**
+- [ ] **Step 3: inference API 구현**
 
 Endpoints:
 
@@ -1260,46 +1097,37 @@ Create body:
 }
 ```
 
-- [ ] **Step 4: Wire worker inference handler**
+- [ ] **Step 4: worker inference handler 연결**
 
-Modify worker:
+Worker 동작:
 
-- If job type is `inference`, load `InferenceRun` and `ModelArtifact`.
-- Mark inference run `running`.
-- Execute `run_yolo_inference`.
-- Scan output directory for rendered images.
-- Write `predictions.json`.
-- Store `InferencePrediction` rows.
-- Mark inference run `completed` or `failed`.
+- job type이 `inference`이면 `InferenceRun`, `ModelArtifact`를 load.
+- inference run을 `running`으로 변경.
+- `run_yolo_inference` 실행.
+- output directory에서 rendered image scan.
+- `predictions.json` 작성.
+- `InferencePrediction` row 저장.
+- 성공 시 `completed`, 실패 시 `failed`.
 
-- [ ] **Step 5: Verify**
-
-Run:
+- [ ] **Step 5: 검증과 commit**
 
 ```bash
-cd backend && . .venv/bin/activate && pytest tests/test_inference_service.py -q
-```
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
+cd backend
+. .venv/bin/activate
+pytest tests/test_inference_service.py -q
 git add backend/app backend/tests/test_inference_service.py
 git commit -m "feat: add queued YOLO inference"
 ```
 
 ---
 
-### Task 10: Backend Route Registration and API Smoke Tests
+### Task 10: Backend Route 등록과 Smoke Test
 
 **Files:**
 - Modify: `backend/app/main.py`
 - Create: `backend/tests/test_api_smoke.py`
 
-- [ ] **Step 1: Write smoke tests**
-
-Test:
+- [ ] **Step 1: smoke test 작성**
 
 ```python
 def test_health(client):
@@ -1314,9 +1142,9 @@ def test_openapi_includes_core_routes(client):
     assert "/api/projects" in paths
 ```
 
-- [ ] **Step 2: Register all routers**
+- [ ] **Step 2: 모든 router 등록**
 
-Modify `backend/app/main.py` to include:
+`backend/app/main.py`:
 
 ```python
 from app.api.routes import datasets, inference, projects, splits, training
@@ -1328,26 +1156,19 @@ app.include_router(training.router)
 app.include_router(inference.router)
 ```
 
-- [ ] **Step 3: Verify backend suite**
-
-Run:
+- [ ] **Step 3: backend 전체 검증과 commit**
 
 ```bash
-cd backend && . .venv/bin/activate && pytest -q
-```
-
-Expected: PASS.
-
-- [ ] **Step 4: Commit**
-
-```bash
+cd backend
+. .venv/bin/activate
+pytest -q
 git add backend/app/main.py backend/tests/test_api_smoke.py
 git commit -m "test: add backend API smoke coverage"
 ```
 
 ---
 
-### Task 11: Frontend Shell, API Client, and Theme
+### Task 11: Frontend Shell, API Client, Theme
 
 **Files:**
 - Create: `frontend/src/api/client.ts`
@@ -1359,9 +1180,7 @@ git commit -m "test: add backend API smoke coverage"
 - Modify: `frontend/src/styles.css`
 - Create: `frontend/tests/theme.test.tsx`
 
-- [ ] **Step 1: Write failing theme test**
-
-Create test:
+- [ ] **Step 1: 실패하는 theme test 작성**
 
 ```tsx
 import { describe, expect, it } from "vitest";
@@ -1380,17 +1199,9 @@ describe("resolveTheme", () => {
 });
 ```
 
-Run:
+- [ ] **Step 2: theme logic 구현**
 
-```bash
-cd frontend && npm test
-```
-
-Expected: FAIL because theme module does not exist.
-
-- [ ] **Step 2: Implement theme**
-
-Create `frontend/src/theme/theme.ts`:
+`frontend/src/theme/theme.ts`:
 
 ```ts
 export type ThemeChoice = "light" | "dark" | "system";
@@ -1402,16 +1213,16 @@ export function resolveTheme(choice: ThemeChoice, prefersDark: boolean): Resolve
 }
 ```
 
-Create `ThemeProvider` that:
+`ThemeProvider` 요구사항:
 
-- Reads `visionops-theme` from local storage.
-- Defaults to `system`.
-- Applies `data-theme="light"` or `data-theme="dark"` to `document.documentElement`.
-- Renders a compact segmented control for `light`, `dark`, `system`.
+- `visionops-theme` local storage 값을 읽는다.
+- 기본값은 `system`.
+- `document.documentElement`에 `data-theme="light"` 또는 `data-theme="dark"`를 적용한다.
+- `light`, `dark`, `system` segmented control을 제공한다.
 
-- [ ] **Step 3: Implement API client**
+- [ ] **Step 3: API client 구현**
 
-Create `frontend/src/api/client.ts`:
+`frontend/src/api/client.ts`:
 
 ```ts
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
@@ -1433,34 +1244,27 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
 }
 ```
 
-- [ ] **Step 4: Style light and dark tokens**
+- [ ] **Step 4: theme CSS token 작성**
 
-In `frontend/src/styles.css`, define:
+`frontend/src/styles.css`:
 
 - `:root[data-theme="light"]`
 - `:root[data-theme="dark"]`
-- background, surface, border, text, muted text, accent, danger, success, warning.
+- background, surface, border, text, muted text, accent, danger, success, warning token
 
-- [ ] **Step 5: Verify**
-
-Run:
+- [ ] **Step 5: 검증과 commit**
 
 ```bash
-cd frontend && npm test && npm run build
-```
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
+cd frontend
+npm test
+npm run build
 git add frontend
 git commit -m "feat: add frontend shell and theme support"
 ```
 
 ---
 
-### Task 12: Frontend Projects, Datasets, and Splits
+### Task 12: Frontend Projects, Datasets, Splits UI
 
 **Files:**
 - Create: `frontend/src/pages/ProjectsPage.tsx`
@@ -1471,9 +1275,7 @@ git commit -m "feat: add frontend shell and theme support"
 - Modify: `frontend/src/api/types.ts`
 - Modify: `frontend/src/styles.css`
 
-- [ ] **Step 1: Define API types**
-
-Add TypeScript types:
+- [ ] **Step 1: API type 정의**
 
 ```ts
 export type Project = {
@@ -1497,19 +1299,19 @@ export type Dataset = {
 };
 ```
 
-- [ ] **Step 2: Implement ProjectsPage**
+- [ ] **Step 2: ProjectsPage 구현**
 
-Create:
+포함 기능:
 
-- Project table.
-- Create project form.
-- Row click opens project detail.
+- project table.
+- create project form.
+- row click으로 project detail 진입.
+- TanStack Query로 `GET /api/projects`.
+- mutation으로 `POST /api/projects`.
 
-Use TanStack Query for `GET /api/projects` and mutation for `POST /api/projects`.
+- [ ] **Step 3: ProjectDetailPage 구현**
 
-- [ ] **Step 3: Implement ProjectDetailPage**
-
-Implement tabs:
+Tab:
 
 - `Overview`
 - `Datasets`
@@ -1517,33 +1319,25 @@ Implement tabs:
 - `Inference`
 - `Artifacts`
 
-Datasets tab supports:
+Datasets tab:
 
-- Dataset path registration.
-- Validation summary display.
-- Split creation form.
-- Split list.
+- dataset path 등록.
+- validation summary 표시.
+- split 생성 form.
+- split list.
 
-- [ ] **Step 4: Verify frontend**
-
-Run:
+- [ ] **Step 4: 검증과 commit**
 
 ```bash
-cd frontend && npm run build
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
+cd frontend
+npm run build
 git add frontend/src
 git commit -m "feat: add project dataset and split UI"
 ```
 
 ---
 
-### Task 13: Frontend Training UI and Live Monitoring
+### Task 13: Frontend Training UI와 Live Monitoring
 
 **Files:**
 - Create: `frontend/src/pages/TrainingRunPage.tsx`
@@ -1553,9 +1347,7 @@ git commit -m "feat: add project dataset and split UI"
 - Modify: `frontend/src/api/types.ts`
 - Modify: `frontend/src/styles.css`
 
-- [ ] **Step 1: Add training types**
-
-Add:
+- [ ] **Step 1: training type 정의**
 
 ```ts
 export type TrainingRun = {
@@ -1574,47 +1366,40 @@ export type TrainingRun = {
 };
 ```
 
-- [ ] **Step 2: Implement training tab**
+- [ ] **Step 2: Training tab 구현**
 
-Training tab supports:
+포함 기능:
 
-- Training run table.
-- Status filter.
-- Create training run form.
-- Model preset select: `yolo11n`, `yolov8n`, `yolov8s`.
-- Hyperparameter inputs: epochs, batch, image size, learning rate, patience, device.
+- training run table.
+- status filter.
+- create training run form.
+- model preset select: `yolo11n`, `yolov8n`, `yolov8s`.
+- hyperparameter input: epochs, batch, image size, learning rate, patience, device.
 
-- [ ] **Step 3: Implement TrainingRunPage**
+- [ ] **Step 3: TrainingRunPage 구현**
 
-Page sections:
+화면 구성:
 
-- Header with status, model, elapsed time.
-- Metric summary cards.
-- `MetricChart` for losses and mAP/precision/recall.
-- `LogViewer` connected to SSE `/logs/stream`, with fallback tail fetch.
-- Artifact list.
-- Config snapshot.
+- status/model/elapsed time header.
+- metric summary cards.
+- losses chart.
+- mAP/precision/recall chart.
+- SSE `/logs/stream` 기반 `LogViewer`.
+- artifact list.
+- config snapshot.
 
-- [ ] **Step 4: Verify frontend**
-
-Run:
-
-```bash
-cd frontend && npm run build
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: 검증과 commit**
 
 ```bash
+cd frontend
+npm run build
 git add frontend/src
 git commit -m "feat: add training dashboard UI"
 ```
 
 ---
 
-### Task 14: Frontend Inference UI and Gallery
+### Task 14: Frontend Inference UI와 Gallery
 
 **Files:**
 - Create: `frontend/src/pages/InferenceRunPage.tsx`
@@ -1622,9 +1407,7 @@ git commit -m "feat: add training dashboard UI"
 - Modify: `frontend/src/api/types.ts`
 - Modify: `frontend/src/styles.css`
 
-- [ ] **Step 1: Add inference types**
-
-Add:
+- [ ] **Step 1: inference type 정의**
 
 ```ts
 export type InferenceRun = {
@@ -1651,71 +1434,63 @@ export type InferencePrediction = {
 };
 ```
 
-- [ ] **Step 2: Implement inference tab**
+- [ ] **Step 2: Inference tab 구현**
 
-Inference tab supports:
+포함 기능:
 
-- Model artifact selection.
-- Input type segmented control.
-- Input path field.
-- Confidence threshold input.
-- Image size input.
-- Inference run table.
+- model artifact select.
+- input type segmented control.
+- input path field.
+- confidence threshold input.
+- image size input.
+- inference run table.
 
-- [ ] **Step 3: Implement InferenceRunPage**
+- [ ] **Step 3: InferenceRunPage 구현**
 
-Page sections:
+화면 구성:
 
-- Summary cards.
-- Class filter.
-- Confidence filter.
-- Gallery grid.
-- Large preview panel.
-- Prediction JSON viewer.
+- summary cards.
+- class filter.
+- confidence filter.
+- gallery grid.
+- large preview panel.
+- prediction JSON viewer.
 
-- [ ] **Step 4: Verify frontend**
-
-Run:
+- [ ] **Step 4: 검증과 commit**
 
 ```bash
-cd frontend && npm run build
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
+cd frontend
+npm run build
 git add frontend/src
 git commit -m "feat: add inference gallery UI"
 ```
 
 ---
 
-### Task 15: End-to-End Smoke Flow and Documentation
+### Task 15: End-to-End Smoke Flow와 문서
 
 **Files:**
 - Modify: `README.md`
 - Create: `backend/tests/test_end_to_end_smoke.py`
-- Modify: `docs/superpowers/specs/2026-07-03-visionops-mvp-design.md` only if implementation decisions changed.
+- Modify: `docs/superpowers/specs/2026-07-03-visionops-mvp-design.md` only if implementation decision changed.
 
-- [ ] **Step 1: Add backend smoke test**
+- [ ] **Step 1: backend smoke test 작성**
 
-Test a no-real-GPU smoke flow with fake training/inference executables:
+실제 GPU 없이 fake training/inference executable로 아래 흐름을 검증한다.
 
-1. Create project.
-2. Register temp YOLO dataset with `data.yaml`.
-3. Create split.
-4. Create training run.
-5. Run worker handler once with fake YOLO train.
-6. Assert model artifact exists.
-7. Create inference run.
-8. Run worker handler once with fake YOLO predict.
-9. Assert inference run completed.
+1. Project 생성.
+2. `data.yaml`이 있는 temp YOLO dataset 등록.
+3. Split 생성.
+4. Training run 생성.
+5. fake YOLO train으로 worker handler 1회 실행.
+6. Model artifact 존재 확인.
+7. Inference run 생성.
+8. fake YOLO predict로 worker handler 1회 실행.
+9. Inference run completed 확인.
 
-- [ ] **Step 2: Add README commands**
+- [ ] **Step 2: README 작성**
 
-Document:
+Backend 실행:
 
 ```bash
 cd backend
@@ -1725,11 +1500,15 @@ pip install -e ".[dev]"
 uvicorn app.main:app --reload
 ```
 
+Worker 실행:
+
 ```bash
 cd backend
 . .venv/bin/activate
 python -m app.worker
 ```
+
+Frontend 실행:
 
 ```bash
 cd frontend
@@ -1737,25 +1516,29 @@ npm install
 npm run dev
 ```
 
-Include:
+README에 명시할 내용:
 
-- Dataset root must contain `data.yaml`.
-- MVP split mode is copy.
-- YOLO CLI must be available for real training.
-- Default frontend URL is Vite's printed local URL.
+- dataset root에는 `data.yaml`이 있어야 한다.
+- MVP split mode는 copy 방식이다.
+- 실제 training/inference에는 YOLO CLI가 필요하다.
+- frontend 기본 URL은 Vite가 출력하는 local URL이다.
 
-- [ ] **Step 3: Run full verification**
+- [ ] **Step 3: 전체 검증**
 
 Run:
 
 ```bash
-cd backend && . .venv/bin/activate && pytest -q
-cd ../frontend && npm test && npm run build
+cd backend
+. .venv/bin/activate
+pytest -q
+cd ../frontend
+npm test
+npm run build
 ```
 
-Expected: all tests and frontend build pass.
+Expected: backend tests, frontend tests, frontend build 모두 PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: commit**
 
 ```bash
 git add README.md backend/tests/test_end_to_end_smoke.py docs/superpowers/specs/2026-07-03-visionops-mvp-design.md
@@ -1768,23 +1551,23 @@ git commit -m "docs: add VisionOps MVP runbook"
 
 Spec coverage:
 
-- Local-first web app: Tasks 1, 2, 11.
-- FastAPI + React + Python worker: Tasks 1, 6, 11.
-- SQLite and local artifacts: Task 2.
-- Project management: Task 3 and Task 12.
-- YOLO dataset with required `data.yaml`: Task 4.
+- 로컬 우선 웹앱: Task 1, 2, 11.
+- FastAPI + React + Python worker: Task 1, 6, 11.
+- SQLite와 local artifacts: Task 2.
+- Project 관리: Task 3, 12.
+- `data.yaml` 필수 YOLO dataset: Task 4.
 - Copy-based split: Task 5.
-- Job queue with one active worker: Task 6.
+- 한 번에 하나만 실행하는 job queue: Task 6.
 - Ultralytics CLI subprocess training: Task 7.
-- Live terminal log and metrics: Task 8 and Task 13.
-- Artifacts: Task 7 and Task 13.
-- Inference single image/folder: Task 9 and Task 14.
+- Live terminal log와 metrics: Task 8, 13.
+- Artifacts: Task 7, 13.
+- 단일 이미지/folder inference: Task 9, 14.
 - Gallery: Task 14.
 - Light/dark/system theme: Task 11.
-- End-to-end verification: Task 15.
+- End-to-end smoke 검증: Task 15.
 
-Known implementation choices:
+구현 선택:
 
-- MVP uses `Base.metadata.create_all` instead of Alembic migrations. This is acceptable for the local-first MVP; Alembic belongs in the team/server expansion phase.
-- MVP uses polling for status/metrics and SSE only for logs.
-- MVP uses fake YOLO executables in tests so tests do not require GPU, network, or real Ultralytics execution.
+- MVP는 Alembic migration 대신 `Base.metadata.create_all`을 사용한다. Alembic은 team/server 확장 단계에서 도입한다.
+- Status/metrics는 polling, log는 SSE를 사용한다.
+- 테스트에서는 fake YOLO executable을 사용해 GPU, network, 실제 Ultralytics 실행 없이 검증한다.
