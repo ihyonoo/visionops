@@ -1,70 +1,71 @@
-# VisionOps MVP Design
+# VisionOps MVP 설계서
 
-Date: 2026-07-03
+작성일: 2026-07-03
 
-## Summary
+## 요약
 
-VisionOps is a local-first web platform for managing computer vision projects. The MVP focuses on an end-to-end Object Detection workflow: project creation, local YOLO dataset registration, dataset validation, train/val split generation, YOLO training, live monitoring, artifact review, model inference, and result visualization.
+VisionOps는 Computer Vision 프로젝트를 관리하기 위한 로컬 우선(local-first) 웹 플랫폼이다. MVP는 Object Detection의 end-to-end 흐름에 집중한다. 사용자는 프로젝트를 만들고, 로컬 YOLO 데이터셋을 등록하고, 데이터셋을 검증하고, train/val split을 생성하고, YOLO 학습을 실행하고, 학습 상황을 실시간으로 확인하고, 학습 결과물을 검토한 뒤, 학습된 모델로 inference를 실행하고 결과를 시각화한다.
 
-The first implementation target is a single-user local web app. It runs on a developer workstation or one GPU server without login, team permissions, cloud storage, or multi-tenant isolation.
+첫 구현 대상은 단일 사용자용 로컬 웹앱이다. 개발자 워크스테이션이나 GPU 서버 한 대에서 실행되는 형태를 기준으로 하며, 로그인, 팀 권한, 클라우드 스토리지, 멀티테넌시 격리는 MVP 범위에서 제외한다.
 
-## Product Scope
+## 제품 범위
 
-### MVP Includes
+### MVP 포함 범위
 
-- Project creation, listing, and project detail pages.
-- Object Detection as the first supported computer vision task.
-- Local folder path registration for YOLO-format datasets.
-- Basic dataset validation.
-- Train/val split generation by copying files into a managed split directory.
-- Ultralytics YOLO model selection and hyperparameter configuration.
-- Training job queue with one active worker at a time.
-- YOLO training through subprocess CLI execution.
-- Live terminal log viewing.
-- Metric chart viewing from YOLO training outputs.
-- Training run list and detail pages.
-- Model artifact tracking for best and last weights.
-- Single-image and folder-based inference.
-- Inference result gallery with bounding box overlays.
+- 프로젝트 생성, 목록, 상세 화면.
+- 첫 번째 지원 태스크는 Object Detection.
+- 로컬 폴더 경로 기반 YOLO format 데이터셋 등록.
+- 기본 데이터셋 검증.
+- 파일 복사 방식의 train/val split 생성.
+- Ultralytics YOLO 모델 선택과 하이퍼파라미터 설정.
+- 한 번에 하나의 active worker만 실행하는 training job queue.
+- subprocess CLI 방식의 YOLO 학습 실행.
+- 실시간 terminal log 조회.
+- YOLO 학습 결과 기반 metric chart 조회.
+- training run 목록과 상세 화면.
+- best/last weights 모델 artifact 추적.
+- 단일 이미지 inference.
+- 폴더 단위 batch inference.
+- bounding box overlay 기반 inference 결과 gallery.
 
-### MVP Excludes
+### MVP 제외 범위
 
-- Login, team permissions, and user management.
-- SaaS deployment and multi-tenancy.
-- Cloud upload/storage.
-- Multi-GPU parallel training.
-- COCO, Pascal VOC, and other dataset importers.
-- Classification and Segmentation implementation.
-- Annotation editing.
-- AutoML and hyperparameter search.
-- Complex pipeline builders.
+- 로그인, 팀 권한, 사용자 관리.
+- SaaS 배포와 멀티테넌시.
+- 클라우드 업로드와 클라우드 스토리지.
+- 멀티 GPU 병렬 학습.
+- COCO, Pascal VOC 등 다른 dataset importer.
+- Classification과 Segmentation 구현.
+- Annotation editor.
+- AutoML과 hyperparameter search.
+- 복잡한 pipeline builder.
 
-## User Flow
+## 사용자 흐름
 
-1. The user creates a project, such as `factory-defect-detection`.
-2. The user registers a local YOLO-format dataset path.
-3. VisionOps validates the dataset and shows image count, label count, class distribution, and errors.
-4. The user creates a train/val split with a ratio and random seed.
-5. VisionOps copies images and labels into a managed split directory and generates a YOLO `data.yaml`.
-6. The user creates a training job by selecting a split, model preset, and hyperparameters.
-7. The training job enters a queue.
-8. The worker runs one queued job at a time through the Ultralytics CLI.
-9. During training, the user sees status, metrics, and terminal logs.
-10. After training, the user reviews metrics, logs, plots, and model artifacts.
-11. The user selects a model artifact and runs inference on a single image or folder.
-12. The user views inference results in a gallery with bounding box overlays.
+1. 사용자가 `factory-defect-detection` 같은 프로젝트를 생성한다.
+2. 사용자가 로컬 YOLO format 데이터셋 경로를 등록한다.
+3. VisionOps가 데이터셋을 검증하고 image count, label count, class distribution, 오류를 보여준다.
+4. 사용자가 ratio와 random seed를 입력해 train/val split을 생성한다.
+5. VisionOps가 이미지와 라벨을 관리되는 split 디렉터리로 복사하고 YOLO `data.yaml`을 생성한다.
+6. 사용자가 split, model preset, hyperparameter를 선택해 training job을 생성한다.
+7. training job이 queue에 들어간다.
+8. worker가 Ultralytics CLI로 queued job을 한 번에 하나씩 실행한다.
+9. 학습 중 사용자는 status, metrics, terminal logs를 확인한다.
+10. 학습 완료 후 사용자는 metrics, logs, plots, model artifacts를 검토한다.
+11. 사용자가 model artifact를 선택하고 단일 이미지 또는 폴더에 inference를 실행한다.
+12. 사용자가 bounding box overlay가 적용된 gallery에서 inference 결과를 확인한다.
 
-## Architecture
+## 아키텍처
 
-The MVP uses a three-part local architecture:
+MVP는 로컬에서 실행되는 3개 구성요소로 나눈다.
 
-- Frontend: React web UI.
-- Backend API: FastAPI server.
-- Worker: Python process for training and inference jobs.
+- Frontend: React 웹 UI.
+- Backend API: FastAPI 서버.
+- Worker: training/inference job을 실행하는 Python 프로세스.
 
-The backend owns project metadata, API routes, local artifact paths, and job state. The worker executes queued training and inference jobs outside the API process so long-running work does not block web requests.
+Backend는 프로젝트 메타데이터, API route, local artifact path, job 상태를 관리한다. Worker는 오래 걸리는 training/inference 작업을 API 프로세스 밖에서 실행해서 웹 요청이 막히지 않게 한다.
 
-## Technology Stack
+## 기술 스택
 
 - Backend: FastAPI.
 - Frontend: React.
@@ -72,12 +73,12 @@ The backend owns project metadata, API routes, local artifact paths, and job sta
 - Database: SQLite.
 - Training engine: Ultralytics YOLO.
 - Training execution: subprocess CLI.
-- Realtime updates: SSE for log streaming, polling for run status and metrics.
+- Realtime updates: log streaming은 SSE, run status와 metrics는 polling.
 - Storage: local filesystem artifact directory.
 
-## Local Storage Layout
+## 로컬 저장소 구조
 
-VisionOps stores metadata in SQLite and large files on disk.
+VisionOps는 메타데이터는 SQLite에 저장하고, 큰 파일은 로컬 파일시스템에 저장한다.
 
 ```text
 vision_ops_data/
@@ -117,32 +118,32 @@ vision_ops_data/
             outputs/
 ```
 
-## Core Data Model
+## 핵심 데이터 모델
 
 ### Project
 
-Top-level workspace for a computer vision problem.
+Computer Vision 문제를 관리하는 최상위 workspace다.
 
-Fields:
+필드:
 
 - `id`
 - `name`
 - `description`
-- `task_type`, initially `detection`
+- `task_type`: 초기값은 `detection`
 - `created_at`
 - `updated_at`
 
 ### Dataset
 
-Registered source dataset. The source path points to the user's local dataset and is not modified.
+프로젝트에 등록된 원본 데이터셋이다. `source_path`는 사용자의 로컬 데이터셋을 가리키며, 원본 데이터셋은 변경하지 않는다.
 
-Fields:
+필드:
 
 - `id`
 - `project_id`
 - `name`
 - `source_path`
-- `format`, initially `yolo`
+- `format`: 초기값은 `yolo`
 - `class_names`
 - `image_count`
 - `label_count`
@@ -152,9 +153,9 @@ Fields:
 
 ### DatasetSplit
 
-Versioned train/val split generated from a dataset.
+특정 dataset에서 생성된 train/val split version이다.
 
-Fields:
+필드:
 
 - `id`
 - `dataset_id`
@@ -171,9 +172,9 @@ Fields:
 
 ### TrainingRun
 
-One model training experiment.
+모델 학습 1회를 의미한다. 실험 비교의 기본 단위다.
 
-Fields:
+필드:
 
 - `id`
 - `project_id`
@@ -181,8 +182,8 @@ Fields:
 - `split_id`
 - `name`
 - `model_name`
-- `trainer`, initially `ultralytics`
-- `status`: `queued`, `running`, `completed`, `failed`, or `cancelled`
+- `trainer`: 초기값은 `ultralytics`
+- `status`: `queued`, `running`, `completed`, `failed`, `cancelled`
 - `config`
 - `metrics_summary`
 - `artifact_path`
@@ -193,13 +194,13 @@ Fields:
 
 ### Job
 
-Common execution queue item for training and inference.
+training과 inference 실행을 공통으로 다루는 queue item이다.
 
-Fields:
+필드:
 
 - `id`
-- `type`: `training` or `inference`
-- `target_id`
+- `type`: `training` 또는 `inference`
+- `target_id`: training run id 또는 inference run id
 - `status`
 - `priority`
 - `locked_at`
@@ -209,28 +210,28 @@ Fields:
 
 ### ModelArtifact
 
-Tracked model file produced by training.
+학습 결과로 생성된 model file을 추적한다.
 
-Fields:
+필드:
 
 - `id`
 - `training_run_id`
-- `kind`: `best`, `last`, or `exported`
+- `kind`: `best`, `last`, `exported`
 - `path`
 - `metrics_snapshot`
 - `created_at`
 
 ### InferenceRun
 
-One inference execution against one trained model artifact.
+특정 model artifact로 실행한 inference 1회를 의미한다.
 
-Fields:
+필드:
 
 - `id`
 - `project_id`
 - `model_artifact_id`
 - `name`
-- `input_type`: `single_image` or `folder`
+- `input_type`: `single_image` 또는 `folder`
 - `input_path`
 - `status`
 - `config`
@@ -242,9 +243,9 @@ Fields:
 
 ### InferencePrediction
 
-Per-image prediction metadata for filtering and gallery display.
+이미지별 prediction metadata다. Gallery filtering과 결과 조회를 위해 사용한다.
 
-Fields:
+필드:
 
 - `id`
 - `inference_run_id`
@@ -254,11 +255,11 @@ Fields:
 - `class_names`
 - `max_confidence`
 
-## Dataset Format and Validation
+## 데이터셋 포맷과 검증
 
-The MVP supports YOLO detection datasets.
+MVP는 YOLO detection dataset을 지원한다.
 
-Primary source layout:
+기본 source layout:
 
 ```text
 dataset/
@@ -271,36 +272,36 @@ dataset/
   classes.txt
 ```
 
-The app reads `data.yaml` when present to infer class names.
+`data.yaml`이 있으면 class names를 읽는 데 사용한다.
 
-Class name priority:
+Class name 우선순위:
 
-1. `data.yaml` `names`
+1. `data.yaml`의 `names`
 2. `classes.txt`
-3. User-entered class names in the UI
+3. UI에서 사용자가 직접 입력한 class names
 
-Validation checks:
+검증 항목:
 
-- Dataset path exists.
-- `images` and `labels` directories exist.
-- Supported image extensions: `jpg`, `jpeg`, `png`, `bmp`, `webp`.
-- Image count and label count.
+- Dataset path 존재 여부.
+- `images`와 `labels` 디렉터리 존재 여부.
+- 지원 이미지 확장자: `jpg`, `jpeg`, `png`, `bmp`, `webp`.
+- Image count와 label count.
 - Image/label basename matching.
-- Empty labels are allowed as negative images.
-- Label lines match `class_id x_center y_center width height`.
-- `class_id` is within class list range.
-- Bounding box values are normalized in the `0..1` range.
-- Bounding box width and height are greater than zero.
-- Corrupt images are reported.
-- Class distribution is summarized.
-- Unlabeled image count is reported.
-- Label files without matching images are reported.
+- 빈 label file은 negative image로 허용.
+- Label line이 `class_id x_center y_center width height` 형식인지 확인.
+- `class_id`가 class list 범위 안에 있는지 확인.
+- Bounding box 값이 `0..1` 범위로 normalized 되어 있는지 확인.
+- Bounding box width와 height가 0보다 큰지 확인.
+- 깨진 이미지 파일 보고.
+- Class distribution 요약.
+- Unlabeled image count 보고.
+- Matching image가 없는 label file 보고.
 
-## Split Generation
+## Split 생성
 
-The MVP uses copy-based train/val split generation.
+MVP는 copy-based train/val split generation을 사용한다.
 
-The split output layout is:
+Split output layout:
 
 ```text
 splits/
@@ -315,7 +316,7 @@ splits/
     split_manifest.json
 ```
 
-Split inputs:
+Split 입력값:
 
 - Split name.
 - Train ratio.
@@ -323,22 +324,22 @@ Split inputs:
 - Random seed.
 - Stratify on/off.
 
-Default values:
+기본값:
 
 - `train_ratio`: `0.8`
 - `val_ratio`: `0.2`
 - `seed`: `42`
 - `stratify`: `false`
 
-Rules:
+규칙:
 
-- Source dataset files are never modified.
-- Images and labels are copied into the managed split directory.
-- The generated split is independent and reproducible.
-- `data.yaml` uses paths relative to the split directory.
-- `split_manifest.json` records source paths, copied paths, ratio, seed, class distribution, and file lists.
+- 원본 dataset file은 절대 변경하지 않는다.
+- 이미지와 라벨을 managed split directory로 복사한다.
+- 생성된 split은 독립적으로 학습 가능한 YOLO dataset이어야 한다.
+- `data.yaml`은 split directory 기준의 상대 경로를 사용한다.
+- `split_manifest.json`에는 source path, copied path, ratio, seed, class distribution, file list를 기록한다.
 
-Generated `data.yaml` example:
+생성되는 `data.yaml` 예시:
 
 ```yaml
 path: /absolute/path/to/splits/<split_id>
@@ -349,13 +350,13 @@ names:
   1: scratch
 ```
 
-Future versions can add `symlink` and `txt-list` split modes. The MVP only implements copy mode.
+향후 버전에서는 `symlink`, `txt-list` split mode를 추가할 수 있다. MVP는 copy mode만 구현한다.
 
-## Training Execution
+## 학습 실행
 
-The MVP uses an adapter boundary even though only Ultralytics YOLO is implemented first.
+MVP에서는 Ultralytics YOLO만 구현하지만, 내부 구조는 trainer adapter 경계를 둔다.
 
-Conceptual trainer interface:
+개념적 trainer interface:
 
 ```python
 class TrainerAdapter:
@@ -365,9 +366,9 @@ class TrainerAdapter:
     def collect_artifacts(self, run): ...
 ```
 
-The first implementation is `UltralyticsTrainerAdapter`.
+첫 구현체는 `UltralyticsTrainerAdapter`다.
 
-Training is executed through the Ultralytics CLI as a subprocess. Example:
+학습은 Ultralytics CLI를 subprocess로 실행한다. 예시:
 
 ```bash
 yolo detect train \
@@ -380,76 +381,76 @@ yolo detect train \
   name=<run_id>
 ```
 
-Worker behavior:
+Worker 동작:
 
-1. Acquire the oldest queued job.
-2. Mark the job and target run as `running`.
-3. Generate or verify the split `data.yaml`.
-4. Execute the YOLO CLI subprocess.
-5. Append stdout and stderr to `stdout.log`.
-6. Expose log updates through SSE.
-7. Read `results.csv` for metric updates.
-8. Register `best.pt`, `last.pt`, plots, and summaries as artifacts.
-9. Mark the run as `completed`, `failed`, or `cancelled`.
+1. 가장 오래된 queued job을 가져온다.
+2. job과 target run을 `running`으로 변경한다.
+3. split의 `data.yaml`을 생성하거나 검증한다.
+4. YOLO CLI subprocess를 실행한다.
+5. stdout과 stderr를 `stdout.log`에 append한다.
+6. SSE를 통해 log update를 노출한다.
+7. `results.csv`를 읽어 metric update를 제공한다.
+8. `best.pt`, `last.pt`, plots, summary를 artifact로 등록한다.
+9. 결과에 따라 run을 `completed`, `failed`, `cancelled`로 변경한다.
 
-The MVP job queue accepts multiple jobs but runs only one at a time.
+MVP의 job queue는 여러 job을 받을 수 있지만, 실행은 한 번에 하나만 한다.
 
-## Training Monitoring
+## 학습 모니터링
 
-The training run detail page shows:
+Training run detail 화면은 다음을 보여준다.
 
-- Current status.
+- 현재 status.
 - Model name.
-- Dataset and split.
+- Dataset과 split.
 - Elapsed time.
 - Best metric summary.
 - Loss charts.
-- mAP, precision, and recall charts.
+- mAP, precision, recall charts.
 - Terminal log stream.
 - Config snapshot.
 - Artifact list.
-- Error summary for failed runs.
+- Failed run의 error summary.
 
-Realtime strategy:
+Realtime 전략:
 
-- Logs stream through SSE by tailing the run log file.
-- Status and metrics are polled every 1 to 2 seconds.
-- Metrics are read from Ultralytics `results.csv`.
+- Log는 run log file을 tailing해서 SSE로 stream한다.
+- Status와 metrics는 1-2초 간격으로 polling한다.
+- Metrics는 Ultralytics `results.csv`에서 읽는다.
 
-## Inference Execution
+## Inference 실행
 
-Inference uses a separate adapter boundary.
+Inference도 adapter 경계를 둔다.
 
-Responsibilities:
+책임:
 
-- Load selected model artifact.
-- Execute prediction for a single image or a folder.
-- Save rendered output images.
-- Save prediction JSON.
-- Create summary metadata for the UI.
+- 선택된 model artifact load.
+- 단일 이미지 또는 폴더 prediction 실행.
+- Rendered output image 저장.
+- Prediction JSON 저장.
+- UI용 summary metadata 생성.
 
-MVP options:
+MVP 옵션:
 
-- `input_type`: `single_image` or `folder`
+- `input_type`: `single_image` 또는 `folder`
 - `input_path`
 - confidence threshold
 - image size
 
-Inference results are stored under the inference run artifact directory and shown as a gallery.
+Inference 결과는 inference run artifact directory에 저장하고 gallery로 보여준다.
 
-## UI Structure
+## UI 구조
 
-The app opens directly to the Projects screen.
+앱의 첫 화면은 Projects 화면이다. 별도의 marketing landing page는 만들지 않는다.
 
 ### Projects
 
 - Project list.
 - Create project.
-- Project name, task type, recent run state, and recent activity summary.
+- Project name, task type, recent run state, recent activity summary 표시.
 
 ### Project Detail
 
-Project detail uses tabs:
+Project detail은 tab 구조를 사용한다.
 
 - `Overview`
 - `Datasets`
@@ -459,33 +460,39 @@ Project detail uses tabs:
 
 ### Overview
 
-- Recent datasets.
-- Recent training runs.
+- 최근 datasets.
+- 최근 training runs.
 - Best metric summary.
-- Recent inference runs.
-- Primary next-action buttons.
+- 최근 inference runs.
+- 주요 next-action buttons.
 
 ### Datasets
 
-- Register local dataset path.
-- Run validation.
-- Show validation summary.
-- Show class distribution.
-- Create split.
-- List splits with counts, ratio, and seed.
+- Local dataset path 등록.
+- Validation 실행.
+- Validation summary 표시.
+- Class distribution 표시.
+- Split 생성.
+- Split list 표시: counts, ratio, seed.
 
 ### Training
 
-- List training runs.
-- Filter by status.
+- Training run list.
+- Status filter.
 - Create training run.
-- Select model preset.
-- Select dataset split.
-- Configure core hyperparameters.
+- Model preset 선택.
+- Dataset split 선택.
+- 핵심 hyperparameter 설정.
 
-Initial model presets are `yolo11n`, `yolov8n`, and `yolov8s`. If an installed Ultralytics version does not support one preset, the UI marks it unavailable.
+초기 model preset:
 
-Core hyperparameters:
+- `yolo11n`
+- `yolov8n`
+- `yolov8s`
+
+설치된 Ultralytics 버전이 특정 preset을 지원하지 않으면 UI에서 unavailable 상태로 표시한다.
+
+핵심 hyperparameter:
 
 - epochs
 - batch
@@ -506,11 +513,11 @@ Core hyperparameters:
 
 ### Inference
 
-- Select model artifact.
-- Select input type.
-- Enter single image path or folder path.
-- Configure confidence threshold and image size.
-- List inference runs.
+- Model artifact 선택.
+- Input type 선택.
+- Single image path 또는 folder path 입력.
+- Confidence threshold와 image size 설정.
+- Inference run list.
 
 ### Inference Run Detail
 
@@ -522,74 +529,74 @@ Core hyperparameters:
 - Bounding box overlay.
 - Prediction JSON viewer.
 
-## UI Tone
+## UI 톤
 
-VisionOps uses a quiet, dense operations dashboard style rather than a marketing website style.
+VisionOps는 marketing website가 아니라 조용하고 밀도 있는 operations dashboard 스타일을 사용한다.
 
-Guidelines:
+가이드라인:
 
-- First screen is project work, not a landing page.
-- Use tables, tabs, split panes, and fixed-height panels.
-- Avoid decorative hero sections.
-- Use restrained colors and clear status indicators.
-- Keep logs, charts, and galleries stable in size.
-- Use explicit action buttons: `Register Dataset`, `Create Split`, `Start Training`, `Run Inference`.
+- 첫 화면은 project work 화면이며 landing page가 아니다.
+- Table, tabs, split panes, fixed-height panels를 중심으로 구성한다.
+- 장식적인 hero section은 만들지 않는다.
+- 절제된 색상과 명확한 status indicator를 사용한다.
+- Logs, charts, galleries는 안정적인 크기를 유지한다.
+- 핵심 action button은 명확하게 표시한다: `Register Dataset`, `Create Split`, `Start Training`, `Run Inference`.
 
-## MVP Completion Criteria
+## MVP 완료 기준
 
-The MVP is complete when a user can:
+사용자가 아래 작업을 모두 할 수 있으면 MVP가 완료된 것으로 본다.
 
-- Create a project.
-- Register a local YOLO dataset.
-- Validate the dataset.
-- Create a copy-based train/val split.
-- Start a YOLO training job.
-- Watch live terminal logs.
-- Watch metric charts.
-- View completed training artifacts.
-- Select the best model artifact.
-- Run inference on a single image.
-- Run inference on a folder.
-- View inference results in a gallery.
+- Project 생성.
+- Local YOLO dataset 등록.
+- Dataset validation.
+- Copy-based train/val split 생성.
+- YOLO training job 시작.
+- Live terminal log 확인.
+- Metric chart 확인.
+- 완료된 training artifact 확인.
+- Best model artifact 선택.
+- 단일 이미지 inference 실행.
+- 폴더 inference 실행.
+- Gallery에서 inference 결과 확인.
 
-## Post-MVP Roadmap
+## Post-MVP 로드맵
 
-### Dataset Improvements
+### Dataset 개선
 
 - COCO import.
 - Pascal VOC import.
 - YOLO export.
 - Duplicate image detection.
-- Class imbalance warnings.
+- Class imbalance warning.
 - Bounding box preview.
 - Dataset version diff.
-- Split mode selection: copy, symlink, txt-list.
+- Split mode 선택: copy, symlink, txt-list.
 
-### Experiment Comparison
+### Experiment 비교
 
-- Select multiple training runs.
-- Overlay metric charts.
-- Show hyperparameter diffs.
-- Compare best artifacts.
-- Compare sample predictions.
+- 여러 training run 선택.
+- Metric chart overlay.
+- Hyperparameter diff.
+- Best artifact 비교.
+- Sample prediction 비교.
 
 ### Classification
 
-- Folder-per-class dataset support.
+- Folder-per-class dataset 지원.
 - Train/val split.
-- Accuracy, F1, and confusion matrix.
+- Accuracy, F1, confusion matrix.
 - Top-k prediction view.
 
 ### Segmentation
 
-- YOLO segmentation or COCO segmentation dataset support.
+- YOLO segmentation 또는 COCO segmentation dataset 지원.
 - Mask overlay gallery.
-- mIoU and Dice metrics.
-- Polygon and mask validation.
+- mIoU와 Dice metrics.
+- Polygon과 mask validation.
 
-### Execution Improvements
+### 실행 고도화
 
-- Stable job cancellation.
+- 안정적인 job cancellation.
 - Job retry.
 - Multiple workers.
 - GPU selection.
@@ -601,9 +608,9 @@ The MVP is complete when a user can:
 - Training report generation.
 - Inference summary report.
 - Dataset health report.
-- HTML or PDF export.
+- HTML 또는 PDF export.
 
-### Team and Server Expansion
+### Team/Server 확장
 
 - Login.
 - Project sharing.
