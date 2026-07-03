@@ -27,6 +27,7 @@ VisionOps는 Computer Vision 프로젝트를 관리하기 위한 로컬 우선(l
 - 단일 이미지 inference.
 - 폴더 단위 batch inference.
 - bounding box overlay 기반 inference 결과 gallery.
+- Light mode와 dark mode UI theme.
 
 ### MVP 제외 범위
 
@@ -534,6 +535,14 @@ Project detail은 tab 구조를 사용한다.
 
 VisionOps는 marketing website가 아니라 조용하고 밀도 있는 operations dashboard 스타일을 사용한다.
 
+Theme 정책:
+
+- Light mode와 dark mode를 모두 지원한다.
+- 기본 theme은 system preference를 따른다.
+- 사용자는 UI에서 light/dark/system 중 하나를 선택할 수 있다.
+- 선택한 theme은 local storage에 저장한다.
+- Chart, terminal log, status badge, gallery overlay는 두 theme 모두에서 충분한 contrast를 유지해야 한다.
+
 가이드라인:
 
 - 첫 화면은 project work 화면이며 landing page가 아니다.
@@ -559,6 +568,7 @@ VisionOps는 marketing website가 아니라 조용하고 밀도 있는 operation
 - 단일 이미지 inference 실행.
 - 폴더 inference 실행.
 - Gallery에서 inference 결과 확인.
+- Light mode와 dark mode 전환.
 
 ## Post-MVP 로드맵
 
