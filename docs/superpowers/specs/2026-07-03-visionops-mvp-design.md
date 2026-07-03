@@ -163,7 +163,6 @@ Computer Vision 문제를 관리하는 최상위 workspace다.
 - `train_ratio`
 - `val_ratio`
 - `seed`
-- `stratify`
 - `train_count`
 - `val_count`
 - `split_path`
@@ -263,26 +262,28 @@ MVP는 YOLO detection dataset을 지원한다.
 
 ```text
 dataset/
+  data.yaml
   images/
     img001.jpg
     img002.jpg
   labels/
     img001.txt
     img002.txt
-  classes.txt
 ```
 
-`data.yaml`이 있으면 class names를 읽는 데 사용한다.
+사용자는 데이터셋 등록 시 `data.yaml`이 포함된 dataset root path를 입력해야 한다. MVP에서는 `classes.txt`나 UI 직접 입력 방식으로 class names를 대체하지 않는다.
 
-Class name 우선순위:
+`data.yaml` 요구사항:
 
-1. `data.yaml`의 `names`
-2. `classes.txt`
-3. UI에서 사용자가 직접 입력한 class names
+- `names`가 반드시 있어야 한다.
+- `names`는 list 또는 id-to-name mapping 형식을 허용한다.
+- `train`, `val` 항목은 원본 데이터셋 등록 시에는 없어도 된다. VisionOps가 split 생성 후 새 `data.yaml`을 생성한다.
 
 검증 항목:
 
 - Dataset path 존재 여부.
+- `data.yaml` 존재 여부.
+- `data.yaml`의 `names` 존재 여부.
 - `images`와 `labels` 디렉터리 존재 여부.
 - 지원 이미지 확장자: `jpg`, `jpeg`, `png`, `bmp`, `webp`.
 - Image count와 label count.
@@ -322,14 +323,12 @@ Split 입력값:
 - Train ratio.
 - Val ratio.
 - Random seed.
-- Stratify on/off.
 
 기본값:
 
 - `train_ratio`: `0.8`
 - `val_ratio`: `0.2`
 - `seed`: `42`
-- `stratify`: `false`
 
 규칙:
 
@@ -338,6 +337,8 @@ Split 입력값:
 - 생성된 split은 독립적으로 학습 가능한 YOLO dataset이어야 한다.
 - `data.yaml`은 split directory 기준의 상대 경로를 사용한다.
 - `split_manifest.json`에는 source path, copied path, ratio, seed, class distribution, file list를 기록한다.
+- MVP split은 seed 기반 random split만 지원한다.
+- Class distribution을 맞추는 stratified split은 MVP 이후 기능으로 둔다.
 
 생성되는 `data.yaml` 예시:
 
@@ -570,6 +571,7 @@ VisionOps는 marketing website가 아니라 조용하고 밀도 있는 operation
 - Class imbalance warning.
 - Bounding box preview.
 - Dataset version diff.
+- Class distribution을 고려한 stratified split.
 - Split mode 선택: copy, symlink, txt-list.
 
 ### Experiment 비교
