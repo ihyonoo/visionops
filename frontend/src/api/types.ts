@@ -1,0 +1,158 @@
+export type JsonObject = Record<string, unknown>;
+export type Timestamp = string;
+
+export type Project = {
+  id: string;
+  name: string;
+  description: string;
+  task_type: "detection" | string;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+};
+
+export type ProjectCreate = {
+  name: string;
+  description?: string;
+};
+
+export type Dataset = {
+  id: string;
+  project_id: string;
+  name: string;
+  source_path: string;
+  format?: string;
+  class_names: string[];
+  image_count: number;
+  label_count: number;
+  validation_status: "valid" | "invalid" | "unknown" | string;
+  validation_summary?: JsonObject | null;
+  created_at?: Timestamp;
+};
+
+export type DatasetCreate = {
+  name: string;
+  source_path: string;
+};
+
+export type DatasetSplit = {
+  id: string;
+  dataset_id: string;
+  name: string;
+  train_ratio: number;
+  val_ratio: number;
+  seed: number;
+  train_count: number;
+  val_count: number;
+  split_path: string;
+  dataset_yaml_path: string;
+  created_at: Timestamp;
+};
+
+export type DatasetSplitCreate = {
+  name: string;
+  train_ratio: number;
+  val_ratio: number;
+  seed?: number;
+};
+
+export type TrainingConfig = {
+  epochs: number;
+  batch: number;
+  imgsz: number;
+  learning_rate: number;
+  patience: number;
+  device: string;
+};
+
+export type TrainingRunStatus = "queued" | "pending" | "running" | "completed" | "failed" | string;
+
+export type TrainingRun = {
+  id: string;
+  project_id: string;
+  dataset_id: string;
+  split_id: string;
+  name: string;
+  model_name: string;
+  trainer: string;
+  status: TrainingRunStatus;
+  config: TrainingConfig & JsonObject;
+  metrics_summary: JsonObject | null;
+  artifact_path: string | null;
+  log_path: string | null;
+  started_at: Timestamp | null;
+  finished_at: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+};
+
+export type TrainingRunCreate = {
+  name: string;
+  split_id: string;
+  model_name: string;
+  config: TrainingConfig;
+};
+
+export type TrainingLog = {
+  lines: string[];
+  offset: number;
+};
+
+export type TrainingMetrics = {
+  summary: JsonObject;
+  rows: JsonObject[];
+};
+
+export type ModelArtifact = {
+  id: string;
+  training_run_id: string;
+  kind: string;
+  path: string;
+  metrics_snapshot: JsonObject;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+};
+
+export type InferenceConfig = {
+  conf?: number;
+  imgsz?: number;
+};
+
+export type InferenceInputTypeCreate = "image" | "single_image" | "folder";
+export type InferenceInputType = "image" | "folder";
+
+export type InferenceRun = {
+  id: string;
+  project_id: string;
+  model_artifact_id: string;
+  name: string;
+  input_type: InferenceInputType;
+  input_path: string;
+  status: string;
+  config: JsonObject;
+  output_path: string | null;
+  prediction_count: number;
+  started_at: Timestamp | null;
+  finished_at: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+};
+
+export type InferenceRunCreate = {
+  name: string;
+  model_artifact_id: string;
+  input_type: InferenceInputTypeCreate;
+  input_path: string;
+  config?: InferenceConfig;
+};
+
+export type InferencePrediction = {
+  id: string;
+  inference_run_id: string;
+  image_path: string;
+  output_image_path: string;
+  prediction_json: JsonObject;
+  class_names: string[];
+  max_confidence: number;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+};
