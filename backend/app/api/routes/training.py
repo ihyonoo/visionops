@@ -9,17 +9,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
-from app.models import Dataset, DatasetSplit, ModelArtifact, Project, TrainingRun
+from app.models import Dataset, DatasetSplit, Job, ModelArtifact, Project, TrainingRun
 from app.schemas import (
     ModelArtifactRead,
     TrainingLogRead,
     TrainingMetricsRead,
+    TrainingPreflightRead,
     TrainingRunCreate,
     TrainingRunRead,
 )
-from app.services.jobs import enqueue_job
+from app.services.jobs import CANCELLED, enqueue_job
 from app.services.logs import stream_log, tail_log_with_offset
 from app.services.metrics import read_results_csv, summarize_metrics
+from app.services.runtime import build_training_preflight, check_runtime
 
 router = APIRouter(prefix="/api/projects/{project_id}/training-runs", tags=["training"])
 
@@ -83,6 +85,21 @@ def create_training_run(
     return run
 
 
+@router.post("/preflight", response_model=TrainingPreflightRead)
+def preflight_training_run(
+    project_id: str,
+    payload: TrainingRunCreate,
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    dataset, split = _require_project_split(db, project_id, payload.split_id)
+    return build_training_preflight(
+        dataset=dataset,
+        split=split,
+        config=payload.config.model_dump(),
+        runtime_check=check_runtime(),
+    )
+
+
 @router.get("", response_model=list[TrainingRunRead])
 def list_training_runs(
     project_id: str,
@@ -104,6 +121,39 @@ def get_training_run(
     db: Annotated[Session, Depends(get_db)],
 ) -> TrainingRun:
     return _require_training_run(db, project_id, run_id)
+
+
+@router.post("/{run_id}/cancel", response_model=TrainingRunRead)
+def cancel_training_run(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> TrainingRun:
+    run = _require_training_run(db, project_id, run_id)
+    if run.status in {"completed", "failed", "cancelled"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="이미 종료된 학습 실행은 중단할 수 없습니다.",
+        )
+    if run.status == "queued":
+        run.status = "cancelled"
+        job = db.scalar(
+            select(Job).where(
+                Job.type == "training",
+                Job.target_id == run.id,
+                Job.status == "queued",
+            )
+        )
+        if job is not None:
+            job.status = CANCELLED
+        db.commit()
+        db.refresh(run)
+        return run
+
+    run.status = "cancel_requested"
+    db.commit()
+    db.refresh(run)
+    return run
 
 
 @router.get("/{run_id}/logs", response_model=TrainingLogRead)

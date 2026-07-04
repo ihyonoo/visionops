@@ -56,6 +56,26 @@ sys.exit({exit_code})
     return executable
 
 
+def make_fake_yolo_predict_without_detections(tmp_path: Path) -> Path:
+    executable = tmp_path / "bin" / "yolo"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text(
+        """#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+args = dict(arg.split("=", 1) for arg in sys.argv[3:] if "=" in arg)
+run_dir = Path(args["project"]) / args["name"]
+run_dir.mkdir(parents=True, exist_ok=True)
+print("fake inference without detections")
+sys.exit(0)
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
 def _create_project_training_artifact(db, tmp_path: Path, project_id: str = "project-1"):
     project = Project(id=project_id, name="라인 A", description="", task_type="detection")
     dataset = Dataset(
@@ -170,6 +190,61 @@ def test_post_inference_run_creates_queued_run_and_job(client, db, tmp_path):
     job = db.scalar(select(Job).where(Job.type == "inference", Job.target_id == run.id))
     assert job is not None
     assert job.status == "queued"
+
+
+def test_upload_inference_folder_creates_managed_input_and_queued_job(client, db, tmp_path):
+    project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+
+    response = client.post(
+        f"/api/projects/{project.id}/inference-runs/upload",
+        data={
+            "name": "uploaded-folder",
+            "model_artifact_id": artifact.id,
+            "input_type": "folder",
+            "conf": "0.35",
+            "imgsz": "512",
+        },
+        files=[
+            ("inputs", ("images/nested/part-a.jpg", b"image-a", "image/jpeg")),
+            ("inputs", ("images/part-b.png", b"image-b", "image/png")),
+        ],
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "uploaded-folder"
+    assert body["input_type"] == "folder"
+    assert body["config"] == {"conf": 0.35, "imgsz": 512}
+    input_path = Path(body["input_path"])
+    assert input_path.is_dir()
+    assert (input_path / "nested" / "part-a.jpg").read_bytes() == b"image-a"
+    assert (input_path / "part-b.png").read_bytes() == b"image-b"
+
+    run = db.get(InferenceRun, body["id"])
+    assert run is not None
+    job = db.scalar(select(Job).where(Job.type == "inference", Job.target_id == run.id))
+    assert job is not None
+    assert job.status == "queued"
+
+
+def test_upload_inference_single_image_creates_managed_file(client, db, tmp_path):
+    project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+
+    response = client.post(
+        f"/api/projects/{project.id}/inference-runs/upload",
+        data={
+            "name": "uploaded-image",
+            "model_artifact_id": artifact.id,
+            "input_type": "image",
+        },
+        files=[("inputs", ("sample.jpg", b"image", "image/jpeg"))],
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["input_type"] == "image"
+    assert Path(body["input_path"]).is_file()
+    assert Path(body["input_path"]).read_bytes() == b"image"
 
 
 def test_post_inference_run_accepts_single_image_alias(client, db, tmp_path):
@@ -337,6 +412,45 @@ def test_inference_worker_completes_run_and_writes_predictions_json(
     assert prediction.image_path == str(input_dir / "image1.jpg")
     assert prediction.max_confidence == 0.91
     assert prediction.class_names == ["scratch"]
+
+
+def test_inference_worker_records_input_images_when_no_detections(
+    db, tmp_path, monkeypatch
+):
+    project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+    bin_dir = tmp_path / "bin"
+    make_fake_yolo_predict_without_detections(bin_dir.parent)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+    input_dir = tmp_path / "images"
+    input_dir.mkdir()
+    (input_dir / "image1.jpg").write_text("source", encoding="utf-8")
+    run = InferenceRun(
+        id="inference-no-detections",
+        project_id=project.id,
+        model_artifact_id=artifact.id,
+        name="batch-test",
+        input_type="folder",
+        input_path=str(input_dir),
+        status="queued",
+        config={"conf": 0.25, "imgsz": 640},
+    )
+    job = Job(id="job-inference-no-detections", type="inference", target_id=run.id, status="running")
+    db.add_all([run, job])
+    db.commit()
+
+    handle_inference_job(db, job)
+
+    db.refresh(run)
+    assert run.status == "completed"
+    assert run.prediction_count == 1
+    prediction = db.scalar(
+        select(InferencePrediction).where(InferencePrediction.inference_run_id == run.id)
+    )
+    assert prediction is not None
+    assert prediction.image_path == str(input_dir / "image1.jpg")
+    assert prediction.output_image_path == str(input_dir / "image1.jpg")
+    assert prediction.prediction_json["detections"] == []
+    assert prediction.max_confidence == 0.0
 
 
 def test_inference_worker_maps_nested_output_to_nested_input(db, tmp_path, monkeypatch):
@@ -563,3 +677,42 @@ def test_predictions_endpoint_returns_rows_and_rejects_outside_project(client, d
     )
 
     assert outside_response.status_code == 404
+
+
+def test_prediction_image_endpoint_serves_rendered_image(client, db, tmp_path):
+    project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    rendered_image = output_dir / "image1.jpg"
+    rendered_image.write_bytes(b"rendered-image")
+    run = InferenceRun(
+        id="inference-image-api",
+        project_id=project.id,
+        model_artifact_id=artifact.id,
+        name="batch-test",
+        input_type="image",
+        input_path=str(tmp_path / "image1.jpg"),
+        status="completed",
+        config={"conf": 0.25, "imgsz": 640},
+        output_path=str(output_dir),
+        prediction_count=1,
+    )
+    prediction = InferencePrediction(
+        id="prediction-image-1",
+        inference_run_id=run.id,
+        image_path=str(tmp_path / "image1.jpg"),
+        output_image_path=str(rendered_image),
+        prediction_json={"detections": []},
+        class_names=["scratch"],
+        max_confidence=0.0,
+    )
+    db.add_all([run, prediction])
+    db.commit()
+
+    response = client.get(
+        f"/api/projects/{project.id}/inference-runs/{run.id}/predictions/{prediction.id}/image"
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"rendered-image"
+    assert response.headers["content-type"] == "image/jpeg"

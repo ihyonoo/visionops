@@ -1,17 +1,18 @@
 import { Monitor, Moon, Sun } from "lucide-react";
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
+import { useLanguage } from "../i18n/LanguageProvider";
 import { resolveTheme, ThemeChoice } from "./theme";
 
 const STORAGE_KEY = "visionops-theme";
 const THEME_CHOICES: Array<{
   value: ThemeChoice;
-  label: string;
+  labelKey: string;
   icon: typeof Sun;
 }> = [
-  { value: "light", label: "밝게", icon: Sun },
-  { value: "dark", label: "어둡게", icon: Moon },
-  { value: "system", label: "시스템", icon: Monitor },
+  { value: "light", labelKey: "theme.light", icon: Sun },
+  { value: "dark", labelKey: "theme.dark", icon: Moon },
+  { value: "system", labelKey: "theme.system", icon: Monitor },
 ];
 
 function isThemeChoice(value: string | null): value is ThemeChoice {
@@ -38,6 +39,13 @@ function readPrefersDark(): boolean {
 type ThemeProviderProps = {
   children: ReactNode;
 };
+
+type ThemeContextValue = {
+  setThemeChoice: (choice: ThemeChoice) => void;
+  themeChoice: ThemeChoice;
+};
+
+const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: ThemeProviderProps) {
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>(readStoredTheme);
@@ -78,24 +86,39 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     return () => mediaQuery.removeListener(handleChange);
   }, []);
 
+  const contextValue = useMemo(
+    () => ({ setThemeChoice, themeChoice }),
+    [setThemeChoice, themeChoice],
+  );
+
+  return <ThemeContext.Provider value={contextValue}>{children}</ThemeContext.Provider>;
+}
+
+export function ThemeControl() {
+  const themeContext = useContext(ThemeContext);
+  const { t } = useLanguage();
+  if (!themeContext) return null;
+
+  const { setThemeChoice, themeChoice } = themeContext;
+
   return (
-    <>
-      {children}
-      <div className="theme-control" aria-label="테마 선택">
-        {THEME_CHOICES.map(({ value, label, icon: Icon }) => (
+    <div className="theme-control" aria-label={t("theme.select")}>
+      {THEME_CHOICES.map(({ value, labelKey, icon: Icon }) => {
+        const label = t(labelKey);
+        return (
           <button
             aria-pressed={themeChoice === value}
             className="theme-control__button"
             key={value}
             onClick={() => setThemeChoice(value)}
-            title={`${label} 테마`}
+            title={t("theme.title", { label })}
             type="button"
           >
             <Icon aria-hidden="true" size={16} strokeWidth={2} />
             <span>{label}</span>
           </button>
-        ))}
-      </div>
-    </>
+        );
+      })}
+    </div>
   );
 }

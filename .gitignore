@@ -10,5 +10,5 @@ coverage/
 vision_ops_data/
 *.db
 *.log
+*.pt
 docs/
-

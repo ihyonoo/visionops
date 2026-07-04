@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
+from app.services.runtime import runtime_yolo_executable
+
 
 @dataclass(frozen=True)
 class InferenceResult:
@@ -44,13 +46,13 @@ def run_yolo_inference(
     input_path: Path,
     output_dir: Path,
     config: dict[str, Any] | None = None,
-    yolo_executable: str = "yolo",
+    yolo_executable: str | None = None,
 ) -> InferenceResult:
     log_dir = output_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     stdout_log_path = log_dir / "stdout.log"
     command = build_yolo_predict_command(
-        yolo_executable=yolo_executable,
+        yolo_executable=yolo_executable or runtime_yolo_executable(),
         model_path=model_path,
         input_path=input_path,
         output_dir=output_dir,

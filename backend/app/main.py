@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import datasets, inference, projects, splits, training
+from app.api.routes import datasets, inference, projects, runtime, splits, training
 from app.core.config import settings
 from app.db import Base, engine
 
@@ -18,6 +18,7 @@ app.include_router(datasets.router)
 app.include_router(splits.router)
 app.include_router(training.router)
 app.include_router(inference.router)
+app.include_router(runtime.router)
 
 
 @app.on_event("startup")

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiGet } from "../api/client";
 import type { TrainingLog } from "../api/types";
+import { useLanguage } from "../i18n/LanguageProvider";
 
 type LogViewerProps = {
   projectId: string;
@@ -67,6 +68,7 @@ function mergeTailWithCurrent(tailLines: string[], currentLines: string[]): stri
 }
 
 export function LogViewer({ projectId, runId, status }: LogViewerProps) {
+  const { t } = useLanguage();
   const [lines, setLines] = useState<string[]>([]);
   const [streamState, setStreamState] = useState<"idle" | "connected" | "unavailable">("idle");
   const preRef = useRef<HTMLPreElement | null>(null);
@@ -128,18 +130,23 @@ export function LogViewer({ projectId, runId, status }: LogViewerProps) {
   }, [lines]);
 
   const streamLabel = useMemo(() => {
-    if (!shouldStream(status)) return "저장된 로그";
-    if (streamState === "connected") return "실시간 연결";
-    if (streamState === "unavailable") return "실시간 연결 불가";
-    return "실시간 준비";
-  }, [status, streamState]);
+    if (!shouldStream(status)) return t("log.saved");
+    if (streamState === "connected") return t("log.connected");
+    if (streamState === "unavailable") return t("log.unavailable");
+    return t("log.ready");
+  }, [status, streamState, t]);
 
   return (
     <div className="log-viewer">
       <div className="log-viewer__toolbar">
         <span>
+          <i className="log-viewer__window-controls" aria-hidden="true">
+            <b />
+            <b />
+            <b />
+          </i>
           <Terminal aria-hidden="true" size={16} />
-          로그
+          {t("log.title")}
         </span>
         <small data-state={streamState}>
           <Radio aria-hidden="true" size={14} />
@@ -149,7 +156,7 @@ export function LogViewer({ projectId, runId, status }: LogViewerProps) {
 
       {logsQuery.isError ? (
         <div className="notice notice--warning" role="alert">
-          로그 tail을 불러오지 못했습니다. 실행 상태가 바뀌면 다시 시도됩니다.
+          {t("log.tailError")}
         </div>
       ) : null}
 
@@ -159,7 +166,7 @@ export function LogViewer({ projectId, runId, status }: LogViewerProps) {
         </pre>
       ) : (
         <div className="empty-state empty-state--compact">
-          <p>{logsQuery.isLoading ? "로그를 불러오는 중입니다." : "로그 없음"}</p>
+          <p>{logsQuery.isLoading ? t("log.loading") : t("log.empty")}</p>
         </div>
       )}
     </div>

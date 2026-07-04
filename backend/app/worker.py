@@ -38,6 +38,26 @@ def _training_config(run: TrainingRun) -> dict:
         "learning_rate": 0.01,
         "patience": 20,
         "device": "cpu",
+        "optimizer": "auto",
+        "lrf": 0.01,
+        "momentum": 0.937,
+        "weight_decay": 0.0005,
+        "warmup_epochs": 3.0,
+        "cos_lr": False,
+        "close_mosaic": 10,
+        "cache": False,
+        "workers": 8,
+        "seed": 0,
+        "deterministic": True,
+        "amp": True,
+        "freeze": 0,
+        "dropout": 0.0,
+        "mosaic": 1.0,
+        "mixup": 0.0,
+        "degrees": 0.0,
+        "translate": 0.1,
+        "scale": 0.5,
+        "fliplr": 0.5,
     }
     defaults.update(run.config or {})
     return defaults
@@ -86,7 +106,7 @@ def handle_training_job(db: Session, job: Job) -> None:
         return
 
     now = datetime.now(timezone.utc)
-    run_dir = StoragePaths(settings.artifact_root).train_run_dir(run.project_id, run.id)
+    run_dir = StoragePaths(settings.artifact_root).train_run_dir(run.project_id, run.id).resolve()
     stdout_log_path = run_dir / "logs" / "stdout.log"
     run.status = "running"
     run.started_at = now
@@ -99,12 +119,7 @@ def handle_training_job(db: Session, job: Job) -> None:
         result = run_yolo_training(
             model_name=run.model_name,
             data_yaml_path=Path(split.dataset_yaml_path),
-            epochs=int(config["epochs"]),
-            imgsz=int(config["imgsz"]),
-            batch=int(config["batch"]),
-            learning_rate=float(config["learning_rate"]),
-            patience=int(config["patience"]),
-            device=str(config["device"]),
+            config=config,
             run_parent=run_dir.parent,
             run_name=run_dir.name,
         )
@@ -129,6 +144,24 @@ def handle_training_job(db: Session, job: Job) -> None:
         db.commit()
         return
 
+    if not result.results_csv_path.is_file():
+        run.status = "failed"
+        run.finished_at = datetime.now(timezone.utc)
+        job.status = FAILED
+        job.error_message = "학습 결과 파일을 찾을 수 없습니다."
+        db.commit()
+        return
+
+    best_weight_path = result.run_dir / "weights" / "best.pt"
+    last_weight_path = result.run_dir / "weights" / "last.pt"
+    if not best_weight_path.is_file() or not last_weight_path.is_file():
+        run.status = "failed"
+        run.finished_at = datetime.now(timezone.utc)
+        job.status = FAILED
+        job.error_message = "학습 모델 아티팩트 파일을 찾을 수 없습니다."
+        db.commit()
+        return
+
     try:
         rows = read_results_csv(result.results_csv_path)
         metrics_summary = summarize_metrics(rows)
@@ -139,14 +172,14 @@ def handle_training_job(db: Session, job: Job) -> None:
             db,
             run=run,
             kind="best",
-            path=result.run_dir / "weights" / "best.pt",
+            path=best_weight_path,
             metrics_summary=metrics_summary,
         )
         _register_artifact(
             db,
             run=run,
             kind="last",
-            path=result.run_dir / "weights" / "last.pt",
+            path=last_weight_path,
             metrics_summary=metrics_summary,
         )
         job.status = COMPLETED
@@ -299,29 +332,49 @@ def _write_inference_predictions(
 ) -> int:
     predictions_payload: list[dict] = []
     db.execute(delete(InferencePrediction).where(InferencePrediction.inference_run_id == run.id))
+    input_by_relative, _input_by_name = _input_image_index(Path(run.input_path))
+    recorded_inputs: set[str] = set()
+
+    def add_prediction(*, image_path: Path, output_image_path: Path, detections: list[dict], max_confidence: float) -> None:
+        prediction_json = {
+            "image_path": str(image_path),
+            "output_image_path": str(output_image_path),
+            "detections": detections,
+        }
+        predictions_payload.append(prediction_json)
+        recorded_inputs.add(str(image_path))
+        db.add(
+            InferencePrediction(
+                id=uuid.uuid4().hex,
+                inference_run_id=run.id,
+                image_path=str(image_path),
+                output_image_path=str(output_image_path),
+                prediction_json=prediction_json,
+                class_names=class_names,
+                max_confidence=max_confidence,
+            )
+        )
 
     for rendered_image in _rendered_images(output_dir):
         detections, max_confidence = _parse_label_file(
             _label_path_for_rendered_image(output_dir, rendered_image),
             class_names,
         )
-        image_path = _source_image_path(run, rendered_image)
-        prediction_json = {
-            "image_path": image_path,
-            "output_image_path": str(rendered_image),
-            "detections": detections,
-        }
-        predictions_payload.append(prediction_json)
-        db.add(
-            InferencePrediction(
-                id=uuid.uuid4().hex,
-                inference_run_id=run.id,
-                image_path=image_path,
-                output_image_path=str(rendered_image),
-                prediction_json=prediction_json,
-                class_names=class_names,
-                max_confidence=max_confidence,
-            )
+        add_prediction(
+            image_path=Path(_source_image_path(run, rendered_image)),
+            output_image_path=rendered_image,
+            detections=detections,
+            max_confidence=max_confidence,
+        )
+
+    for image_path in input_by_relative.values():
+        if str(image_path) in recorded_inputs:
+            continue
+        add_prediction(
+            image_path=image_path,
+            output_image_path=image_path,
+            detections=[],
+            max_confidence=0.0,
         )
 
     (output_dir / "predictions.json").write_text(

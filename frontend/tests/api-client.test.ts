@@ -32,6 +32,32 @@ describe("api client", () => {
     );
   });
 
+  it("lets the browser set multipart headers for FormData", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const formData = new FormData();
+    formData.append("name", "demo");
+
+    await apiPost<{ ok: boolean }>("/api/projects/p1/datasets/upload", formData);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/projects/p1/datasets/upload",
+      expect.objectContaining({
+        body: formData,
+        headers: expect.not.objectContaining({
+          "Content-Type": expect.any(String),
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
   it("formats object detail errors", async () => {
     vi.stubGlobal(
       "fetch",

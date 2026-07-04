@@ -11,6 +11,11 @@ class ProjectCreate(BaseModel):
     description: str = ""
 
 
+class ProjectUpdate(BaseModel):
+    name: NonEmptyString | None = None
+    description: str | None = None
+
+
 class ProjectRead(BaseModel):
     id: str
     name: str
@@ -73,6 +78,26 @@ class TrainingConfig(BaseModel):
     learning_rate: float = Field(default=0.01, gt=0)
     patience: int = Field(default=20, gt=0)
     device: NonEmptyString = "cpu"
+    optimizer: str = "auto"
+    lrf: float = Field(default=0.01, gt=0)
+    momentum: float = Field(default=0.937, gt=0)
+    weight_decay: float = Field(default=0.0005, ge=0)
+    warmup_epochs: float = Field(default=3.0, ge=0)
+    cos_lr: bool = False
+    close_mosaic: int = Field(default=10, ge=0)
+    cache: bool = False
+    workers: int = Field(default=8, ge=0)
+    seed: int = Field(default=0, ge=0)
+    deterministic: bool = True
+    amp: bool = True
+    freeze: int = Field(default=0, ge=0)
+    dropout: float = Field(default=0.0, ge=0, le=1)
+    mosaic: float = Field(default=1.0, ge=0, le=1)
+    mixup: float = Field(default=0.0, ge=0, le=1)
+    degrees: float = Field(default=0.0, ge=0)
+    translate: float = Field(default=0.1, ge=0, le=1)
+    scale: float = Field(default=0.5, ge=0)
+    fliplr: float = Field(default=0.5, ge=0, le=1)
 
 
 class TrainingRunCreate(BaseModel):
@@ -111,6 +136,39 @@ class TrainingLogRead(BaseModel):
 class TrainingMetricsRead(BaseModel):
     summary: dict
     rows: list[dict]
+
+
+class RuntimeInstallRequest(BaseModel):
+    profile: Literal["cpu", "cuda"] = "cpu"
+
+
+class RuntimeInstallRead(BaseModel):
+    profile: str
+    status: str
+    commands: list[str]
+    log_path: str
+    message: str
+
+
+class RuntimeCheckRead(BaseModel):
+    ready: bool
+    install_required: bool
+    python: dict
+    packages: dict
+    yolo_cli: dict
+    devices: list[dict]
+    install_options: list[dict]
+
+
+class TrainingPreflightRead(BaseModel):
+    can_start: bool
+    blocking_issues: list[str]
+    warnings: list[str]
+    recommendations: list[str]
+    devices: list[dict]
+    selected_device: dict
+    runtime: dict
+    suggested_config: dict
 
 
 class ModelArtifactRead(BaseModel):

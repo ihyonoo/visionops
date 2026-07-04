@@ -16,7 +16,10 @@ from app.main import app  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def reset_database(tmp_path, monkeypatch):
+    from app.services import runtime as runtime_service
+
     monkeypatch.setattr(settings, "artifact_root", tmp_path / "artifacts")
+    monkeypatch.setattr(runtime_service, "RUNTIME_ROOT", tmp_path / "runtime")
     engine.dispose()
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
     Base.metadata.drop_all(bind=engine)

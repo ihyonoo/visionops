@@ -1,6 +1,10 @@
 from dataclasses import dataclass
+from collections.abc import Mapping
 from pathlib import Path
 import subprocess
+from typing import Any
+
+from app.services.runtime import runtime_yolo_executable
 
 
 @dataclass(frozen=True)
@@ -15,31 +19,72 @@ def _model_weight_name(model_name: str) -> str:
     return model_name if model_name.endswith(".pt") else f"{model_name}.pt"
 
 
+TRAINING_CLI_KEYS = [
+    "epochs",
+    "imgsz",
+    "batch",
+    "learning_rate",
+    "patience",
+    "device",
+    "optimizer",
+    "lrf",
+    "momentum",
+    "weight_decay",
+    "warmup_epochs",
+    "cos_lr",
+    "close_mosaic",
+    "cache",
+    "workers",
+    "seed",
+    "deterministic",
+    "amp",
+    "freeze",
+    "dropout",
+    "mosaic",
+    "mixup",
+    "degrees",
+    "translate",
+    "scale",
+    "fliplr",
+]
+
+TRAINING_CLI_ARG_NAMES = {
+    "learning_rate": "lr0",
+}
+
+
+def _format_cli_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    return str(value)
+
+
+def _training_config_args(config: Mapping[str, Any]) -> list[str]:
+    args: list[str] = []
+    for key in TRAINING_CLI_KEYS:
+        if key not in config or config[key] is None:
+            continue
+        cli_key = TRAINING_CLI_ARG_NAMES.get(key, key)
+        args.append(f"{cli_key}={_format_cli_value(config[key])}")
+    return args
+
+
 def build_yolo_train_command(
     *,
+    yolo_executable: str = "yolo",
     model_name: str,
     data_yaml_path: Path,
-    epochs: int,
-    imgsz: int,
-    batch: int,
-    learning_rate: float,
-    patience: int,
-    device: str,
+    config: Mapping[str, Any],
     run_parent: Path,
     run_name: str,
 ) -> list[str]:
     return [
-        "yolo",
+        yolo_executable,
         "detect",
         "train",
         f"model={_model_weight_name(model_name)}",
         f"data={data_yaml_path}",
-        f"epochs={epochs}",
-        f"imgsz={imgsz}",
-        f"batch={batch}",
-        f"lr0={learning_rate}",
-        f"patience={patience}",
-        f"device={device}",
+        *_training_config_args(config),
         f"project={run_parent}",
         f"name={run_name}",
         "exist_ok=True",
@@ -50,28 +95,20 @@ def run_yolo_training(
     *,
     model_name: str,
     data_yaml_path: Path,
-    epochs: int,
-    imgsz: int,
-    batch: int,
-    learning_rate: float,
-    patience: int,
-    device: str,
+    config: Mapping[str, Any],
     run_parent: Path,
     run_name: str,
+    yolo_executable: str | None = None,
 ) -> TrainingResult:
     run_dir = run_parent / run_name
     log_dir = run_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     stdout_log_path = log_dir / "stdout.log"
     command = build_yolo_train_command(
+        yolo_executable=yolo_executable or runtime_yolo_executable(),
         model_name=model_name,
         data_yaml_path=data_yaml_path,
-        epochs=epochs,
-        imgsz=imgsz,
-        batch=batch,
-        learning_rate=learning_rate,
-        patience=patience,
-        device=device,
+        config=config,
         run_parent=run_parent,
         run_name=run_name,
     )

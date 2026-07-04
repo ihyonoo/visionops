@@ -7,6 +7,7 @@ import type { JsonObject, ModelArtifact, TrainingMetrics, TrainingRun } from "..
 import { LogViewer } from "../components/LogViewer";
 import { MetricChart } from "../components/MetricChart";
 import { StatusBadge } from "../components/StatusBadge";
+import { useLanguage, type Language } from "../i18n/LanguageProvider";
 
 type TrainingRunPageProps = {
   initialRun?: TrainingRun | null;
@@ -51,17 +52,21 @@ const QUALITY_PRIORITY_KEYS = [
   "fitness",
 ];
 
-function formatDateTime(value: string | null | undefined): string {
+function formatDateTime(value: string | null | undefined, language: Language): string {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("ko-KR", {
+  return new Intl.DateTimeFormat(language === "en" ? "en-US" : "ko-KR", {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
 }
 
-function formatElapsed(startedAt: string | null | undefined, finishedAt: string | null | undefined): string {
+function formatElapsed(
+  startedAt: string | null | undefined,
+  finishedAt: string | null | undefined,
+  language: Language,
+): string {
   if (!startedAt) return "-";
   const start = new Date(startedAt).getTime();
   const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
@@ -71,9 +76,14 @@ function formatElapsed(startedAt: string | null | undefined, finishedAt: string 
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}시간 ${minutes}분`;
-  if (minutes > 0) return `${minutes}분 ${seconds}초`;
-  return `${seconds}초`;
+  if (language === "en") {
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    if (minutes > 0) return `${minutes}m ${seconds}s`;
+    return `${seconds}s`;
+  }
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -150,6 +160,7 @@ function formatConfigValue(value: unknown): string {
 }
 
 export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPageProps) {
+  const { language, t } = useLanguage();
   const runQuery = useQuery({
     enabled: Boolean(runId),
     initialData: initialRun ?? undefined,
@@ -193,25 +204,25 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
 
   if (!runId || !run) {
     return (
-      <section className="panel training-detail" aria-label="학습 실행 상세">
+      <section className="panel training-detail" aria-label={t("training.detail")}>
         <div className="panel__header">
           <div>
-            <p className="section-label">상세</p>
-            <h2>학습 실행</h2>
+            <p className="section-label">{t("training.detail")}</p>
+            <h2>{t("training.run")}</h2>
           </div>
         </div>
         <div className="empty-state empty-state--compact">
-          <p>선택된 학습 실행이 없습니다.</p>
+          <p>{t("training.noRunSelected")}</p>
         </div>
       </section>
     );
   }
 
   return (
-    <section className="training-detail" aria-label="학습 실행 상세">
+    <section className="training-detail" aria-label={t("training.detail")}>
       <div className="panel training-detail__header">
         <div>
-          <p className="section-label">학습 실행 상세</p>
+          <p className="section-label">{t("training.detail")}</p>
           <h2>{run.name}</h2>
         </div>
         <StatusBadge status={run.status} />
@@ -222,7 +233,7 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
           </span>
           <span>
             <Clock3 aria-hidden="true" size={15} />
-            {formatElapsed(run.started_at, run.finished_at)}
+            {formatElapsed(run.started_at, run.finished_at, language)}
           </span>
         </div>
       </div>
@@ -237,7 +248,7 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
           ))
         ) : (
           <div className="metric-card metric-card--empty">
-            <span>요약 지표</span>
+            <span>{t("training.summaryMetrics")}</span>
             <strong>-</strong>
           </div>
         )}
@@ -247,22 +258,22 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
         <div className="panel">
           <div className="panel__header">
             <div>
-              <p className="section-label">타임라인</p>
-              <h2>실행 시간</h2>
+              <p className="section-label">{t("training.timeline")}</p>
+              <h2>{t("training.elapsed")}</h2>
             </div>
           </div>
           <dl className="detail-list">
             <div>
-              <dt>생성</dt>
-              <dd>{formatDateTime(run.created_at)}</dd>
+              <dt>{t("training.created")}</dt>
+              <dd>{formatDateTime(run.created_at, language)}</dd>
             </div>
             <div>
-              <dt>시작</dt>
-              <dd>{formatDateTime(run.started_at)}</dd>
+              <dt>{t("training.started")}</dt>
+              <dd>{formatDateTime(run.started_at, language)}</dd>
             </div>
             <div>
-              <dt>종료</dt>
-              <dd>{formatDateTime(run.finished_at)}</dd>
+              <dt>{t("training.finished")}</dt>
+              <dd>{formatDateTime(run.finished_at, language)}</dd>
             </div>
           </dl>
         </div>
@@ -271,7 +282,7 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
           <div className="panel__header">
             <div>
               <p className="section-label">Config</p>
-              <h2>스냅샷</h2>
+              <h2>Snapshot</h2>
             </div>
             <SlidersHorizontal aria-hidden="true" size={18} />
           </div>
@@ -285,7 +296,7 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
           </dl>
           {Object.keys(run.config ?? {}).length === 0 ? (
             <div className="empty-state empty-state--compact">
-              <p>저장된 설정이 없습니다.</p>
+              <p>{t("training.emptyConfig")}</p>
             </div>
           ) : null}
         </div>
@@ -293,16 +304,16 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
 
       <div className="chart-grid">
         <MetricChart
-          emptyLabel="loss 지표가 아직 없습니다."
+          emptyLabel={t("training.emptyLoss")}
           metricKeys={lossKeys}
           rows={rows}
           title="Loss"
         />
         <MetricChart
-          emptyLabel="품질 지표가 아직 없습니다."
+          emptyLabel={t("training.emptyQuality")}
           metricKeys={qualityKeys}
           rows={rows}
-          title="품질 지표"
+          title={t("training.qualityMetrics")}
         />
       </div>
 
@@ -313,8 +324,8 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
       <div className="panel">
         <div className="panel__header">
           <div>
-            <p className="section-label">Artifacts</p>
-            <h2>산출물</h2>
+            <p className="section-label">Models</p>
+            <h2>{t("training.modelFiles")}</h2>
           </div>
           <FileArchive aria-hidden="true" size={18} />
         </div>
@@ -323,9 +334,9 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>종류</th>
-                  <th>경로</th>
-                  <th>생성</th>
+                  <th>{t("training.modelKind")}</th>
+                  <th>{t("training.modelPath")}</th>
+                  <th>{t("training.created")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -333,7 +344,7 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
                   <tr key={artifact.id}>
                     <td>{artifact.kind}</td>
                     <td>{artifact.path}</td>
-                    <td>{formatDateTime(artifact.created_at)}</td>
+                    <td>{formatDateTime(artifact.created_at, language)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -341,7 +352,7 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
           </div>
         ) : (
           <div className="empty-state empty-state--compact">
-            <p>산출물 없음</p>
+            <p>{t("training.modelFilesEmpty")}</p>
           </div>
         )}
       </div>

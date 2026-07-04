@@ -15,6 +15,11 @@ export type ProjectCreate = {
   description?: string;
 };
 
+export type ProjectUpdate = {
+  name?: string;
+  description?: string;
+};
+
 export type Dataset = {
   id: string;
   project_id: string;
@@ -62,6 +67,26 @@ export type TrainingConfig = {
   learning_rate: number;
   patience: number;
   device: string;
+  optimizer: string;
+  lrf: number;
+  momentum: number;
+  weight_decay: number;
+  warmup_epochs: number;
+  cos_lr: boolean;
+  close_mosaic: number;
+  cache: boolean;
+  workers: number;
+  seed: number;
+  deterministic: boolean;
+  amp: boolean;
+  freeze: number;
+  dropout: number;
+  mosaic: number;
+  mixup: number;
+  degrees: number;
+  translate: number;
+  scale: number;
+  fliplr: number;
 };
 
 export type TrainingRunStatus = "queued" | "pending" | "running" | "completed" | "failed" | string;
@@ -90,6 +115,47 @@ export type TrainingRunCreate = {
   split_id: string;
   model_name: string;
   config: TrainingConfig;
+};
+
+export type RuntimeDevice = {
+  id: string;
+  label: string;
+  kind: string;
+  available: boolean;
+  details: JsonObject;
+};
+
+export type RuntimeCheck = {
+  ready: boolean;
+  install_required: boolean;
+  python: JsonObject;
+  packages: Record<string, { installed: boolean; version: string | null }>;
+  yolo_cli: { installed: boolean; path: string | null };
+  devices: RuntimeDevice[];
+  install_options: Array<{
+    profile: string;
+    label: string;
+    commands: string[];
+  }>;
+};
+
+export type RuntimeInstallResult = {
+  profile: string;
+  status: string;
+  commands: string[];
+  log_path: string;
+  message: string;
+};
+
+export type TrainingPreflight = {
+  can_start: boolean;
+  blocking_issues: string[];
+  warnings: string[];
+  recommendations: string[];
+  devices: RuntimeDevice[];
+  selected_device: RuntimeDevice;
+  runtime: RuntimeCheck;
+  suggested_config: TrainingConfig & JsonObject;
 };
 
 export type TrainingLog = {

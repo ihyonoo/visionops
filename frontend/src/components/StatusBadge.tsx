@@ -1,16 +1,18 @@
+import { useLanguage } from "../i18n/LanguageProvider";
+
 type StatusTone = "neutral" | "info" | "success" | "warning" | "danger";
 
-const STATUS_LABELS: Record<string, { label: string; tone: StatusTone }> = {
-  completed: { label: "완료", tone: "success" },
-  failed: { label: "실패", tone: "danger" },
-  invalid: { label: "유효하지 않음", tone: "danger" },
-  pending: { label: "대기", tone: "warning" },
-  queued: { label: "대기열", tone: "warning" },
-  ready: { label: "준비됨", tone: "success" },
-  running: { label: "실행 중", tone: "info" },
-  skipped: { label: "건너뜀", tone: "neutral" },
-  unknown: { label: "알 수 없음", tone: "neutral" },
-  valid: { label: "유효", tone: "success" },
+const STATUS_LABELS: Record<string, { labelKey: string; tone: StatusTone }> = {
+  completed: { labelKey: "status.completed", tone: "success" },
+  failed: { labelKey: "status.failed", tone: "danger" },
+  invalid: { labelKey: "status.invalid", tone: "danger" },
+  pending: { labelKey: "status.pending", tone: "warning" },
+  queued: { labelKey: "status.queued", tone: "warning" },
+  ready: { labelKey: "status.ready", tone: "success" },
+  running: { labelKey: "status.running", tone: "info" },
+  skipped: { labelKey: "status.skipped", tone: "neutral" },
+  unknown: { labelKey: "status.unknown", tone: "neutral" },
+  valid: { labelKey: "status.valid", tone: "success" },
 };
 
 type StatusBadgeProps = {
@@ -27,15 +29,17 @@ function humanizeStatus(status: string): string {
 }
 
 export function StatusBadge({ label, status }: StatusBadgeProps) {
+  const { t } = useLanguage();
   const normalizedStatus = status?.trim().toLowerCase() || "unknown";
   const config = STATUS_LABELS[normalizedStatus] ?? {
-    label: humanizeStatus(normalizedStatus),
+    labelKey: "",
     tone: "neutral" as StatusTone,
   };
+  const resolvedLabel = config.labelKey ? t(config.labelKey) : humanizeStatus(normalizedStatus);
 
   return (
     <span className="status-badge" data-tone={config.tone}>
-      {label ?? config.label}
+      {label ?? resolvedLabel}
     </span>
   );
 }

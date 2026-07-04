@@ -61,6 +61,47 @@ sys.exit(7)
     executable.chmod(0o755)
 
 
+def _write_absolute_project_yolo(bin_dir: Path) -> None:
+    executable = bin_dir / "yolo"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text(
+        """#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+args = dict(arg.split("=", 1) for arg in sys.argv[3:] if "=" in arg)
+project = Path(args["project"])
+if not project.is_absolute():
+    print(f"project path is not absolute: {project}")
+    sys.exit(9)
+run_dir = project / args["name"]
+(run_dir / "weights").mkdir(parents=True, exist_ok=True)
+(run_dir / "results.csv").write_text(
+    "epoch, metrics/precision(B), metrics/recall(B), metrics/mAP50(B)\\n"
+    "0,0.80,0.70,0.75\\n",
+    encoding="utf-8",
+)
+(run_dir / "weights" / "best.pt").write_text("best", encoding="utf-8")
+(run_dir / "weights" / "last.pt").write_text("last", encoding="utf-8")
+print("absolute project training")
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+
+
+def _write_no_output_yolo(bin_dir: Path) -> None:
+    executable = bin_dir / "yolo"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text(
+        """#!/usr/bin/env python3
+print("training exited without artifacts")
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+
+
 def _create_project_dataset_split(db, tmp_path: Path) -> tuple[Project, Dataset, DatasetSplit]:
     project = Project(id="project-1", name="라인 A", description="", task_type="detection")
     dataset_root = tmp_path / "dataset"
@@ -123,12 +164,66 @@ def test_post_training_run_creates_queued_run_and_job(client, db, tmp_path):
     assert body["split_id"] == split.id
     assert body["status"] == "queued"
     assert body["config"]["epochs"] == 2
+    assert body["config"]["optimizer"] == "auto"
+    assert body["config"]["weight_decay"] == 0.0005
+    assert body["config"]["amp"] is True
 
     run = db.get(TrainingRun, body["id"])
     assert run is not None
     job = db.scalar(select(Job).where(Job.type == "training", Job.target_id == run.id))
     assert job is not None
     assert job.status == "queued"
+
+
+def test_cancel_queued_training_run_marks_run_and_job_cancelled(client, db, tmp_path):
+    project, _dataset, split = _create_project_dataset_split(db, tmp_path)
+    created = client.post(
+        f"/api/projects/{project.id}/training-runs",
+        json={
+            "name": "baseline",
+            "split_id": split.id,
+            "model_name": "yolov8n",
+            "config": {
+                "epochs": 2,
+                "batch": 2,
+                "imgsz": 320,
+                "learning_rate": 0.01,
+                "patience": 3,
+                "device": "cpu",
+            },
+        },
+    )
+    run_id = created.json()["id"]
+
+    response = client.post(f"/api/projects/{project.id}/training-runs/{run_id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    job = db.scalar(select(Job).where(Job.target_id == run_id))
+    assert job.status == "cancelled"
+
+
+def test_cancel_running_training_run_requests_cancellation(client, db, tmp_path):
+    project, _dataset, split = _create_project_dataset_split(db, tmp_path)
+    run = TrainingRun(
+        id="run-running",
+        project_id=project.id,
+        dataset_id="dataset-1",
+        split_id=split.id,
+        name="running",
+        model_name="yolov8n",
+        status="running",
+        trainer="ultralytics",
+        config={},
+        metrics_summary={},
+    )
+    db.add(run)
+    db.commit()
+
+    response = client.post(f"/api/projects/{project.id}/training-runs/{run.id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancel_requested"
 
 
 def test_post_training_run_rejects_invalid_config(client, db, tmp_path):
@@ -209,6 +304,89 @@ def test_training_worker_completes_run_and_creates_artifacts(db, tmp_path, monke
     assert {artifact.kind for artifact in artifacts} == {"best", "last"}
     assert all(Path(artifact.path).exists() for artifact in artifacts)
     assert Path(run.log_path).read_text(encoding="utf-8").strip() == "worker fake training"
+
+
+def test_training_worker_passes_absolute_project_path_to_yolo(db, tmp_path, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(settings, "artifact_root", Path("relative-artifacts"))
+    project, _dataset, split = _create_project_dataset_split(db, tmp_path)
+    bin_dir = tmp_path / "bin"
+    _write_absolute_project_yolo(bin_dir)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+
+    run = TrainingRun(
+        id="run-relative-root",
+        project_id=project.id,
+        dataset_id=split.dataset_id,
+        split_id=split.id,
+        name="baseline",
+        model_name="yolov8n",
+        trainer="ultralytics",
+        status="queued",
+        config={
+            "epochs": 2,
+            "batch": 2,
+            "imgsz": 320,
+            "learning_rate": 0.01,
+            "patience": 3,
+            "device": "cpu",
+        },
+        metrics_summary={},
+    )
+    job = Job(id="job-relative-root", type="training", target_id=run.id, status="running", priority=100)
+    db.add_all([run, job])
+    db.commit()
+
+    handle_training_job(db, job)
+
+    db.refresh(run)
+    db.refresh(job)
+    assert run.status == "completed"
+    assert job.status == "completed"
+    assert Path(run.artifact_path).is_absolute()
+    assert Path(run.artifact_path, "results.csv").exists()
+
+
+def test_training_worker_fails_when_successful_process_creates_no_results(
+    db, tmp_path, monkeypatch
+):
+    project, _dataset, split = _create_project_dataset_split(db, tmp_path)
+    bin_dir = tmp_path / "bin"
+    _write_no_output_yolo(bin_dir)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+
+    run = TrainingRun(
+        id="run-no-output",
+        project_id=project.id,
+        dataset_id=split.dataset_id,
+        split_id=split.id,
+        name="baseline",
+        model_name="yolov8n",
+        trainer="ultralytics",
+        status="queued",
+        config={
+            "epochs": 2,
+            "batch": 2,
+            "imgsz": 320,
+            "learning_rate": 0.01,
+            "patience": 3,
+            "device": "cpu",
+        },
+        metrics_summary={},
+    )
+    job = Job(id="job-no-output", type="training", target_id=run.id, status="running", priority=100)
+    db.add_all([run, job])
+    db.commit()
+
+    handle_training_job(db, job)
+
+    db.refresh(run)
+    db.refresh(job)
+    assert run.status == "failed"
+    assert job.status == "failed"
+    assert job.error_message == "학습 결과 파일을 찾을 수 없습니다."
 
 
 def test_training_worker_marks_failed_nonzero_exit_and_keeps_log_path(db, tmp_path, monkeypatch):

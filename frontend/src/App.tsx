@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { apiGet } from "./api/client";
 import { Layout } from "./components/Layout";
+import { LanguageProvider, useLanguage } from "./i18n/LanguageProvider";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
 import type { Project } from "./api/types";
 import type { DetailTab } from "./pages/ProjectDetailPage";
@@ -21,19 +22,11 @@ const queryClient = new QueryClient({
   },
 });
 
-const detailTabLabels: Record<DetailTab, string> = {
-  artifacts: "아티팩트",
-  datasets: "데이터셋",
-  inference: "추론",
-  overview: "개요",
-  training: "학습",
-};
-
 function AppContent() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<"projects" | "project-detail">("projects");
-  const [activeTab, setActiveTab] = useState<DetailTab>("overview");
-  const [projectPrompt, setProjectPrompt] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<DetailTab>("datasets");
+  const { t } = useLanguage();
 
   const selectedProjectQuery = useQuery({
     enabled: Boolean(selectedProjectId),
@@ -43,42 +36,33 @@ function AppContent() {
 
   function handleSelectProject(projectId: string) {
     setSelectedProjectId(projectId);
-    setProjectPrompt(null);
-    setActiveTab("overview");
+    setActiveTab("datasets");
     setCurrentView("project-detail");
   }
 
-  function handleOpenProjectTab(tab: DetailTab) {
-    if (!selectedProjectId) {
-      setProjectPrompt(
-        `${detailTabLabels[tab]} 탭을 열려면 먼저 프로젝트를 선택하거나 새 프로젝트를 생성하세요.`,
-      );
+  function handleProjectDeleted(projectId: string) {
+    if (selectedProjectId === projectId) {
+      setSelectedProjectId(null);
+      setActiveTab("datasets");
       setCurrentView("projects");
-      return;
     }
-    setActiveTab(tab);
-    setCurrentView("project-detail");
   }
 
   const title =
     currentView === "projects"
-      ? "프로젝트"
-      : selectedProjectQuery.data?.name ?? "프로젝트 상세";
+      ? t("nav.projects")
+      : selectedProjectQuery.data?.name ?? t("project.detailFallback");
 
   return (
     <Layout
-      activeTab={activeTab}
       currentView={currentView}
-      onOpenProjectTab={handleOpenProjectTab}
       onOpenProjects={() => setCurrentView("projects")}
-      projectName={selectedProjectQuery.data?.name}
-      selectedProjectId={selectedProjectId}
       title={title}
     >
       {currentView === "projects" || !selectedProjectId ? (
         <ProjectsPage
+          onProjectDeleted={handleProjectDeleted}
           onSelectProject={handleSelectProject}
-          prompt={projectPrompt}
           selectedProjectId={selectedProjectId}
         />
       ) : (
@@ -96,9 +80,11 @@ function AppContent() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <AppContent />
-      </ThemeProvider>
+      <LanguageProvider>
+        <ThemeProvider>
+          <AppContent />
+        </ThemeProvider>
+      </LanguageProvider>
     </QueryClientProvider>
   );
 }

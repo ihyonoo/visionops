@@ -10,6 +10,7 @@ import {
 } from "recharts";
 
 import type { JsonObject } from "../api/types";
+import { useLanguage } from "../i18n/LanguageProvider";
 
 type MetricChartProps = {
   emptyLabel?: string;
@@ -51,11 +52,13 @@ function compactMetricName(key: string): string {
 }
 
 export function MetricChart({
-  emptyLabel = "표시할 지표 데이터가 없습니다.",
+  emptyLabel,
   metricKeys,
   rows,
   title,
 }: MetricChartProps) {
+  const { t } = useLanguage();
+  const resolvedEmptyLabel = emptyLabel ?? t("metrics.empty");
   const usableKeys = metricKeys.filter((key) =>
     rows.some((row) => toFiniteNumber(row[key]) !== null),
   );
@@ -118,7 +121,7 @@ export function MetricChart({
         </div>
       ) : (
         <div className="empty-state empty-state--compact">
-          <p>{emptyLabel}</p>
+          <p>{resolvedEmptyLabel}</p>
         </div>
       )}
     </div>

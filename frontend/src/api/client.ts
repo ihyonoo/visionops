@@ -8,6 +8,10 @@ function buildUrl(path: string): string {
   return `${base}${normalizedPath}`;
 }
 
+export function apiUrl(path: string): string {
+  return buildUrl(path);
+}
+
 function formatErrorDetail(detail: unknown): string | null {
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {
@@ -39,18 +43,19 @@ async function readErrorMessage(response: Response): Promise<string> {
 }
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const isFormData = init?.body instanceof FormData;
   const response = await fetch(buildUrl(path), {
     ...init,
     headers: {
       Accept: "application/json",
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.body && !isFormData ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
   });
 
   if (!response.ok) {
     const message = await readErrorMessage(response);
-    throw new Error(`API 요청 실패 (${response.status}): ${message}`);
+    throw new Error(`API request failed (${response.status}): ${message}`);
   }
 
   if (response.status === 204) {
@@ -65,8 +70,23 @@ export async function apiGet<T>(path: string): Promise<T> {
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const requestBody = body instanceof FormData ? body : JSON.stringify(body);
   return apiRequest<T>(path, {
-    body: JSON.stringify(body),
+    body: requestBody,
     method: "POST",
+  });
+}
+
+export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+  const requestBody = body instanceof FormData ? body : JSON.stringify(body);
+  return apiRequest<T>(path, {
+    body: requestBody,
+    method: "PATCH",
+  });
+}
+
+export async function apiDelete(path: string): Promise<void> {
+  return apiRequest<void>(path, {
+    method: "DELETE",
   });
 }

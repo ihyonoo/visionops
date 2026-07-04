@@ -38,6 +38,58 @@ def test_register_valid_dataset(client, tmp_path):
     assert body["label_count"] == 1
 
 
+def test_upload_dataset_from_image_label_folders_and_yaml(client):
+    project_id = create_project(client)
+
+    response = client.post(
+        f"/api/projects/{project_id}/datasets/upload",
+        data={"name": "line-a-upload"},
+        files=[
+            (
+                "images",
+                ("images/nested/part.jpg", _image_bytes(), "image/jpeg"),
+            ),
+            (
+                "labels",
+                (
+                    "labels/nested/part.txt",
+                    b"0 0.5 0.5 0.25 0.25\n",
+                    "text/plain",
+                ),
+            ),
+            ("data_yaml", ("data.yaml", yaml.safe_dump({"names": ["scratch"]}), "text/yaml")),
+        ],
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "line-a-upload"
+    assert body["validation_status"] == "valid"
+    assert body["image_count"] == 1
+    assert body["label_count"] == 1
+    dataset_root = Path(body["source_path"])
+    assert (dataset_root / "images" / "nested" / "part.jpg").is_file()
+    assert (dataset_root / "labels" / "nested" / "part.txt").is_file()
+    assert (dataset_root / "data.yaml").is_file()
+
+
+def test_dataset_thumbnail_serves_first_dataset_image(client, tmp_path):
+    project_id = create_project(client)
+    dataset_path = make_dataset(tmp_path / "dataset")
+    created = client.post(
+        f"/api/projects/{project_id}/datasets",
+        json={"name": "line-a", "source_path": str(dataset_path)},
+    )
+    assert created.status_code == 201
+    dataset_id = created.json()["id"]
+
+    response = client.get(f"/api/projects/{project_id}/datasets/{dataset_id}/thumbnail")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/")
+    assert response.content
+
+
 def test_register_dataset_requires_existing_project(client, tmp_path):
     dataset_path = make_dataset(tmp_path / "dataset")
 
@@ -94,3 +146,11 @@ def test_dataset_create_rejects_blank_fields(client):
     )
 
     assert response.status_code == 422
+
+
+def _image_bytes() -> bytes:
+    from io import BytesIO
+
+    buffer = BytesIO()
+    Image.new("RGB", (16, 16), color="white").save(buffer, format="JPEG")
+    return buffer.getvalue()

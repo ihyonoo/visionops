@@ -3,6 +3,7 @@ import React from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
+import { LanguageProvider } from "../src/i18n/LanguageProvider";
 import { resolveTheme } from "../src/theme/theme";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 
@@ -35,9 +36,11 @@ describe("ThemeProvider", () => {
     try {
       act(() => {
         root.render(
-          <ThemeProvider>
-            <div>content</div>
-          </ThemeProvider>,
+          <LanguageProvider>
+            <ThemeProvider>
+              <div>content</div>
+            </ThemeProvider>
+          </LanguageProvider>,
         );
       });
 

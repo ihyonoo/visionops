@@ -37,3 +37,7 @@ class StoragePaths:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def inference_input_dir(self, project_id: str, run_id: str) -> Path:
+        path = self.project_dir(project_id) / "runs" / "inference_inputs" / run_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path
