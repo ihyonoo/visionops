@@ -1,6 +1,40 @@
 export type JsonObject = Record<string, unknown>;
 export type Timestamp = string;
 
+export type NotificationChannelName = "slack" | "discord" | "telegram";
+
+export type NotificationEvents = {
+  training_completed: boolean;
+  training_failed: boolean;
+  inference_completed: boolean;
+  inference_failed: boolean;
+};
+
+export type NotificationSetting = {
+  channel: NotificationChannelName;
+  enabled: boolean;
+  events: NotificationEvents;
+  has_secret: boolean;
+  masked_secret: string | null;
+  last_status: "sent" | "failed" | string | null;
+  last_error: string | null;
+  last_sent_at: Timestamp | null;
+};
+
+export type NotificationSettingUpdate = {
+  enabled: boolean;
+  events: NotificationEvents;
+  webhook_url?: string;
+  bot_token?: string;
+  chat_id?: string;
+};
+
+export type NotificationTestResult = {
+  channel: NotificationChannelName;
+  status: "sent" | "failed";
+  message: string;
+};
+
 export type Project = {
   id: string;
   name: string;
