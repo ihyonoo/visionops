@@ -1,15 +1,16 @@
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { FolderKanban, Loader2, Plus, X } from "lucide-react";
 
 import { apiGet, apiPost } from "./api/client";
-import { Layout, type ProjectSort } from "./components/Layout";
-import { TrainingQueueWidget } from "./components/TrainingQueueWidget";
+import { Layout, type AppNotification, type ProjectSort } from "./components/Layout";
+import { TrainingQueueWidget, type WorkCompletionNotification } from "./components/TrainingQueueWidget";
 import { LanguageProvider, useLanguage } from "./i18n/LanguageProvider";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
 import type { Project, ProjectCreate } from "./api/types";
 import type { DetailTab } from "./pages/ProjectDetailPage";
+import { NotificationSettingsPage } from "./pages/NotificationSettingsPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { TrainingManagementPage } from "./pages/TrainingManagementPage";
 import { TrainingRunPage } from "./pages/TrainingRunPage";
@@ -28,11 +29,15 @@ const queryClient = new QueryClient({
 });
 
 type AppHistoryState =
-  | { projectId: null; section: "projects" | DetailTab | "training-management"; trainingRunId?: null }
+  | {
+      projectId: null;
+      section: "projects" | DetailTab | "training-management" | "settings-notifications";
+      trainingRunId?: null;
+    }
   | { projectId: string; section: DetailTab | "training-management"; trainingRunId?: string | null };
 
 type AppSection = AppHistoryState["section"];
-type ProjectScopedSection = Exclude<AppSection, "projects">;
+type ProjectScopedSection = Exclude<AppSection, "projects" | "settings-notifications">;
 
 const projectSortStorageKey = "visionops-project-sort";
 const hiddenProjectsStorageKey = "visionops-hidden-projects";
@@ -76,19 +81,54 @@ function appPath(
   projectId: string | null,
   section: AppSection = "projects",
   trainingRunId: string | null = null,
+  projects: Project[] = [],
 ): string {
   if (section === "projects") return "/";
+  if (section === "settings-notifications") return "/settings/notifications";
+  const projectSegment = projectId ? projectUrlSegment(projectId, projects) : null;
   if (projectId && section === "training-management" && trainingRunId) {
-    return `/projects/${encodeURIComponent(projectId)}/${projectScopedPaths[section]}/${encodeURIComponent(
+    return `/projects/${encodeURIComponent(projectSegment ?? projectId)}/${projectScopedPaths[section]}/${encodeURIComponent(
       trainingRunId,
     )}`;
   }
-  return projectId
-    ? `/projects/${encodeURIComponent(projectId)}/${projectScopedPaths[section]}`
+  return projectSegment
+    ? `/projects/${encodeURIComponent(projectSegment)}/${projectScopedPaths[section]}`
     : `/${projectScopedPaths[section]}`;
 }
 
+function projectSlugFromName(name: string): string {
+  return name
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, "")
+    .replace(/[\s_]+/gu, "-")
+    .replace(/-+/gu, "-")
+    .replace(/^-|-$/gu, "") || "project";
+}
+
+function projectRouteSlug(project: Project): string {
+  return project.slug || projectSlugFromName(project.name);
+}
+
+function projectMatchesRef(project: Project, projectRef: string): boolean {
+  return project.id === projectRef || projectRouteSlug(project) === projectRef;
+}
+
+function projectIdFromRef(projectRef: string | null, projects: Project[]): string | null {
+  if (!projectRef) return null;
+  return projects.find((project) => projectMatchesRef(project, projectRef))?.id ?? null;
+}
+
+function projectUrlSegment(projectId: string, projects: Project[]): string {
+  const project = projects.find((candidate) => candidate.id === projectId);
+  return project ? projectRouteSlug(project) : projectId;
+}
+
 function stateFromLocation(): AppHistoryState {
+  if (window.location.pathname === "/settings/notifications") {
+    return { projectId: null, section: "settings-notifications" };
+  }
   const match = window.location.pathname.match(/^\/projects\/([^/]+)(?:\/([^/]+)(?:\/([^/]+))?)?$/);
   if (match) {
     const section = sectionsByPath[match[2] ?? "datasets"] ?? "datasets";
@@ -113,8 +153,13 @@ function stateFromLocation(): AppHistoryState {
 
 function sectionTitleKey(section: AppSection): string {
   if (section === "projects") return "nav.projects";
+  if (section === "settings-notifications") return "notificationSettings.nav";
   if (section === "training-management") return "trainingManagement.nav";
   return `detail.${section}`;
+}
+
+function isProjectScopedSection(section: AppSection): section is ProjectScopedSection {
+  return section !== "projects" && section !== "settings-notifications";
 }
 
 function ProjectRequiredEmpty({
@@ -164,9 +209,12 @@ function AppContent() {
   const [sidebarCreateDialogOpen, setSidebarCreateDialogOpen] = useState(false);
   const [sidebarProjectName, setSidebarProjectName] = useState("");
   const [sidebarProjectDescription, setSidebarProjectDescription] = useState("");
+  const [notifications, setNotifications] = useState<WorkCompletionNotification[]>([]);
   const [focusedTrainingRunId, setFocusedTrainingRunId] = useState<string | null>(
     initialHistoryState.trainingRunId ?? null,
   );
+  const [focusedInferenceRunId, setFocusedInferenceRunId] = useState<string | null>(null);
+  const notificationSettingsReturnStateRef = useRef<AppHistoryState | null>(null);
   const { t } = useLanguage();
 
   useEffect(() => {
@@ -194,21 +242,25 @@ function AppContent() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
-  const selectedProjectQuery = useQuery({
-    enabled: Boolean(selectedProjectId),
-    queryFn: () => apiGet<Project>(`/api/projects/${selectedProjectId as string}`),
-    queryKey: ["projects", selectedProjectId],
-  });
-
   const projectsQuery = useQuery({
     queryFn: () => apiGet<Project[]>("/api/projects"),
     queryKey: ["projects"],
+  });
+  const projects = projectsQuery.data ?? [];
+  const selectedProjectApiId = projectIdFromRef(selectedProjectId, projects);
+
+  const selectedProjectQuery = useQuery({
+    enabled: Boolean(selectedProjectApiId),
+    queryFn: () => apiGet<Project>(`/api/projects/${selectedProjectApiId as string}`),
+    queryKey: ["projects", selectedProjectApiId],
   });
 
   const createSidebarProject = useMutation({
     mutationFn: (body: ProjectCreate) => apiPost<Project>("/api/projects", body),
     onSuccess: (project) => {
-      const nextSection: ProjectScopedSection = activeSection === "projects" ? "datasets" : activeSection;
+      const nextSection: ProjectScopedSection = isProjectScopedSection(activeSection)
+        ? activeSection
+        : "datasets";
       const nextState: AppHistoryState = {
         projectId: project.id,
         section: nextSection,
@@ -217,7 +269,10 @@ function AppContent() {
       setSidebarProjectName("");
       setSidebarProjectDescription("");
       queryClient.invalidateQueries({ queryKey: ["projects"] });
-      window.history.pushState(nextState, "", appPath(project.id, nextSection));
+      window.history.pushState(nextState, "", appPath(project.id, nextSection, null, [
+        project,
+        ...projects,
+      ]));
       setSelectedProjectId(project.id);
       setActiveSection(nextSection);
       setFocusedTrainingRunId(null);
@@ -232,39 +287,73 @@ function AppContent() {
     writeStorageValue(hiddenProjectsStorageKey, JSON.stringify(hiddenProjectIds));
   }, [hiddenProjectIds]);
 
+  useEffect(() => {
+    if (!selectedProjectId || !selectedProjectApiId) return;
+    if (activeSection === "projects") return;
+    if (activeSection === "settings-notifications") return;
+    if (selectedProjectId !== selectedProjectApiId) {
+      setSelectedProjectId(selectedProjectApiId);
+    }
+    const canonicalPath = appPath(
+      selectedProjectApiId,
+      activeSection,
+      focusedTrainingRunId,
+      projects,
+    );
+    if (window.location.pathname !== canonicalPath) {
+      window.history.replaceState(
+        {
+          projectId: selectedProjectApiId,
+          section: activeSection,
+          trainingRunId: focusedTrainingRunId,
+        } satisfies AppHistoryState,
+        "",
+        canonicalPath,
+      );
+    }
+  }, [activeSection, focusedTrainingRunId, projects, selectedProjectApiId, selectedProjectId]);
+
   function handleSelectProject(projectId: string) {
     const nextState: AppHistoryState = {
       projectId,
       section: "datasets",
     };
-    window.history.pushState(nextState, "", appPath(projectId, "datasets"));
+    window.history.pushState(nextState, "", appPath(projectId, "datasets", null, projects));
     setSelectedProjectId(projectId);
     setActiveSection("datasets");
     setFocusedTrainingRunId(null);
+    setFocusedInferenceRunId(null);
   }
 
   function handleSelectProjectInSidebar(projectId: string) {
-    const nextSection: ProjectScopedSection = activeSection === "projects" ? "datasets" : activeSection;
+    const nextSection: ProjectScopedSection = isProjectScopedSection(activeSection)
+      ? activeSection
+      : "datasets";
     const nextState: AppHistoryState = {
       projectId,
       section: nextSection,
       trainingRunId: null,
     };
-    window.history.pushState(nextState, "", appPath(projectId, nextSection));
+    window.history.pushState(nextState, "", appPath(projectId, nextSection, null, projects));
     setSelectedProjectId(projectId);
     setActiveSection(nextSection);
     setFocusedTrainingRunId(null);
+    setFocusedInferenceRunId(null);
   }
 
   function handleSectionChange(section: AppSection) {
     setFocusedTrainingRunId(null);
+    setFocusedInferenceRunId(null);
+    const currentProjectId = selectedProjectApiId ?? selectedProjectId;
     const nextState: AppHistoryState =
       section === "projects"
         ? { projectId: null, section: "projects" }
-        : selectedProjectId
-          ? { projectId: selectedProjectId, section }
+        : section === "settings-notifications"
+          ? { projectId: null, section: "settings-notifications" }
+        : currentProjectId
+          ? { projectId: currentProjectId, section }
           : { projectId: null, section };
-    window.history.pushState(nextState, "", appPath(nextState.projectId, section));
+    window.history.pushState(nextState, "", appPath(nextState.projectId, section, null, projects));
     setSelectedProjectId(nextState.projectId);
     setActiveSection(section);
   }
@@ -276,16 +365,61 @@ function AppContent() {
         ? currentIds.filter((id) => id !== projectId)
         : [...currentIds, projectId],
     );
-    if (willHide && selectedProjectId === projectId && activeSection !== "projects") {
+    if (willHide && (selectedProjectApiId ?? selectedProjectId) === projectId && activeSection !== "projects") {
       const nextState = { projectId: null, section: activeSection } satisfies AppHistoryState;
       window.history.pushState(nextState, "", appPath(null, activeSection));
       setSelectedProjectId(null);
       setFocusedTrainingRunId(null);
+      setFocusedInferenceRunId(null);
     }
   }
 
   function handleOpenProjects() {
     handleSectionChange("projects");
+  }
+
+  function currentHistoryState(): AppHistoryState {
+    if (activeSection === "projects" || activeSection === "settings-notifications") {
+      return { projectId: null, section: activeSection };
+    }
+    const currentProjectId = selectedProjectApiId ?? selectedProjectId;
+    if (currentProjectId) {
+      return {
+        projectId: currentProjectId,
+        section: activeSection,
+        trainingRunId: focusedTrainingRunId,
+      };
+    }
+    return {
+      projectId: null,
+      section: activeSection,
+      trainingRunId: null,
+    };
+  }
+
+  function openNotificationSettings() {
+    const nextState = { projectId: null, section: "settings-notifications" } satisfies AppHistoryState;
+    notificationSettingsReturnStateRef.current = currentHistoryState();
+    window.history.pushState(nextState, "", appPath(null, "settings-notifications"));
+    setSelectedProjectId(null);
+    setActiveSection("settings-notifications");
+    setFocusedTrainingRunId(null);
+  }
+
+  function closeNotificationSettings() {
+    const nextState =
+      notificationSettingsReturnStateRef.current ??
+      ({ projectId: null, section: "projects" } satisfies AppHistoryState);
+    notificationSettingsReturnStateRef.current = null;
+    window.history.pushState(
+      nextState,
+      "",
+      appPath(nextState.projectId, nextState.section, nextState.trainingRunId ?? null, projects),
+    );
+    setSelectedProjectId(nextState.projectId);
+    setActiveSection(nextState.section);
+    setFocusedTrainingRunId(nextState.trainingRunId ?? null);
+    setFocusedInferenceRunId(null);
   }
 
   function handleOpenTrainingRun(projectId: string, runId: string) {
@@ -294,10 +428,66 @@ function AppContent() {
       section: "training-management",
       trainingRunId: runId,
     } satisfies AppHistoryState;
-    window.history.pushState(nextState, "", appPath(projectId, "training-management", runId));
+    window.history.pushState(nextState, "", appPath(projectId, "training-management", runId, projects));
     setSelectedProjectId(projectId);
     setActiveSection("training-management");
     setFocusedTrainingRunId(runId);
+    setFocusedInferenceRunId(null);
+  }
+
+  function handleCloseTrainingRunDetail() {
+    if (!selectedProjectApiId) return;
+    const nextState = {
+      projectId: selectedProjectApiId,
+      section: "training-management",
+      trainingRunId: null,
+    } satisfies AppHistoryState;
+    window.history.pushState(
+      nextState,
+      "",
+      appPath(selectedProjectApiId, "training-management", null, projects),
+    );
+    setActiveSection("training-management");
+    setFocusedTrainingRunId(null);
+    setFocusedInferenceRunId(null);
+  }
+
+  function handleOpenInferenceRun(projectId: string, runId: string) {
+    const nextState = {
+      projectId,
+      section: "inference",
+      trainingRunId: null,
+    } satisfies AppHistoryState;
+    window.history.pushState(nextState, "", appPath(projectId, "inference", null, projects));
+    setSelectedProjectId(projectId);
+    setActiveSection("inference");
+    setFocusedTrainingRunId(null);
+    setFocusedInferenceRunId(runId);
+  }
+
+  function handleWorkNotification(notification: WorkCompletionNotification) {
+    setNotifications((currentNotifications) => {
+      if (currentNotifications.some((currentNotification) => currentNotification.id === notification.id)) {
+        return currentNotifications;
+      }
+      return [notification, ...currentNotifications].slice(0, 20);
+    });
+  }
+
+  function handleOpenNotification(notification: AppNotification) {
+    if ("projectId" in notification && "runId" in notification && notification.projectId && notification.runId) {
+      if ("kind" in notification && notification.kind === "inference") {
+        handleOpenInferenceRun(String(notification.projectId), String(notification.runId));
+        return;
+      }
+      handleOpenTrainingRun(String(notification.projectId), String(notification.runId));
+    }
+  }
+
+  function handleDismissNotification(notificationId: string) {
+    setNotifications((currentNotifications) =>
+      currentNotifications.filter((notification) => notification.id !== notificationId),
+    );
   }
 
   function openSidebarCreateDialog() {
@@ -324,7 +514,7 @@ function AppContent() {
   }
 
   function handleProjectDeleted(projectId: string) {
-    if (selectedProjectId === projectId) {
+    if ((selectedProjectApiId ?? selectedProjectId) === projectId) {
       const nextSection = activeSection === "projects" ? "projects" : activeSection;
       window.history.replaceState(
         { projectId: null, section: nextSection } satisfies AppHistoryState,
@@ -339,48 +529,71 @@ function AppContent() {
   const title =
     activeSection === "projects"
       ? t("nav.projects")
+      : activeSection === "settings-notifications"
+        ? t("notificationSettings.nav")
       : activeSection === "training-management"
         ? t("trainingManagement.nav")
       : selectedProjectQuery.data?.name ?? t(sectionTitleKey(activeSection));
+  const projectScopedLoading = Boolean(
+    selectedProjectId && !selectedProjectApiId && projectsQuery.isLoading,
+  );
 
   return (
     <Layout
       activeSection={activeSection}
       hiddenProjectIds={hiddenProjectIds}
+      notifications={notifications}
       onCreateProject={openSidebarCreateDialog}
+      onOpenNotificationSettings={openNotificationSettings}
       onNavigate={handleSectionChange}
+      onNotificationDismiss={handleDismissNotification}
+      onNotificationOpen={handleOpenNotification}
       onProjectSortChange={setProjectSort}
       onSelectProject={handleSelectProjectInSidebar}
       onToggleProjectHidden={handleToggleProjectHidden}
-      projects={projectsQuery.data ?? []}
+      projects={projects}
       projectsLoading={projectsQuery.isLoading}
       projectSort={projectSort}
-      selectedProjectId={selectedProjectId}
+      selectedProjectId={selectedProjectApiId}
       title={title}
     >
       {activeSection === "projects" ? (
-        <ProjectsPage
-          onProjectDeleted={handleProjectDeleted}
-          onSelectProject={handleSelectProject}
-          selectedProjectId={selectedProjectId}
-        />
-      ) : !selectedProjectId ? (
+      <ProjectsPage
+        onProjectDeleted={handleProjectDeleted}
+        onSelectProject={handleSelectProject}
+        selectedProjectId={selectedProjectApiId}
+      />
+      ) : activeSection === "settings-notifications" ? (
+        <NotificationSettingsPage onBack={closeNotificationSettings} />
+      ) : projectScopedLoading ? (
+        <section className="empty-state empty-state--page" aria-live="polite">
+          <Loader2 aria-hidden="true" className="spin" size={24} />
+          <p>{t("projects.loading")}</p>
+        </section>
+      ) : !selectedProjectApiId ? (
         <ProjectRequiredEmpty onOpenProjects={handleOpenProjects} section={activeSection} />
       ) : activeSection === "training-management" && focusedTrainingRunId ? (
-        <TrainingRunPage projectId={selectedProjectId} runId={focusedTrainingRunId} />
+        <TrainingRunPage
+          onBackToList={handleCloseTrainingRunDetail}
+          projectId={selectedProjectApiId}
+          runId={focusedTrainingRunId}
+        />
       ) : activeSection === "training-management" ? (
-        <TrainingManagementPage onOpenRun={handleOpenTrainingRun} projectId={selectedProjectId} />
+        <TrainingManagementPage onOpenRun={handleOpenTrainingRun} projectId={selectedProjectApiId} />
       ) : (
         <ProjectDetailPage
-          key={selectedProjectId}
+          key={selectedProjectApiId}
           activeTab={activeSection}
+          focusedInferenceRunId={focusedInferenceRunId}
           onTabChange={(tab) => handleSectionChange(tab)}
-          projectId={selectedProjectId}
+          projectId={selectedProjectApiId}
         />
       )}
       <TrainingQueueWidget
+        onNotification={handleWorkNotification}
+        onOpenInferenceRun={handleOpenInferenceRun}
         onOpenRun={handleOpenTrainingRun}
-        projects={projectsQuery.data ?? []}
+        projects={projects}
       />
       {sidebarCreateDialogOpen ? (
         <div className="modal-backdrop" role="presentation">

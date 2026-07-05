@@ -19,6 +19,7 @@ class ProjectUpdate(BaseModel):
 class ProjectRead(BaseModel):
     id: str
     name: str
+    slug: str
     description: str
     task_type: str
     created_at: datetime
@@ -181,6 +182,64 @@ class TrainingPreflightRead(BaseModel):
     runtime: dict
     suggested_config: dict
     command_preview: dict
+
+
+NotificationChannelName = Literal["slack", "discord", "telegram"]
+NotificationEventName = Literal[
+    "training_completed",
+    "training_failed",
+    "inference_completed",
+    "inference_failed",
+]
+
+
+class NotificationEvents(BaseModel):
+    training_completed: bool = True
+    training_failed: bool = True
+    inference_completed: bool = True
+    inference_failed: bool = True
+
+
+class NotificationSettingUpdate(BaseModel):
+    enabled: bool = False
+    events: NotificationEvents = Field(default_factory=NotificationEvents)
+    webhook_url: str | None = None
+    bot_token: str | None = None
+    chat_id: str | None = None
+
+
+class NotificationSettingRead(BaseModel):
+    channel: NotificationChannelName
+    enabled: bool
+    events: NotificationEvents
+    has_secret: bool
+    masked_secret: str | None
+    last_status: str
+    last_error: str | None
+    last_sent_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class NotificationTestRequest(BaseModel):
+    webhook_url: str | None = None
+    bot_token: str | None = None
+    chat_id: str | None = None
+
+
+class NotificationTestRead(BaseModel):
+    channel: NotificationChannelName
+    status: Literal["sent", "failed"]
+    message: str
+
+
+class LocalPathOpenRequest(BaseModel):
+    path: NonEmptyString
+
+
+class LocalPathOpenRead(BaseModel):
+    requested_path: str
+    opened_path: str
 
 
 class ModelArtifactRead(BaseModel):

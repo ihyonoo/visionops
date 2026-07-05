@@ -85,6 +85,14 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   });
 }
 
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  const requestBody = body instanceof FormData ? body : JSON.stringify(body);
+  return apiRequest<T>(path, {
+    body: requestBody,
+    method: "PUT",
+  });
+}
+
 export async function apiDelete(path: string): Promise<void> {
   return apiRequest<void>(path, {
     method: "DELETE",

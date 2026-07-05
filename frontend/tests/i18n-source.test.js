@@ -64,4 +64,14 @@ describe("English localization coverage", () => {
     expect(source).toContain('"training.namePlaceholder": "학습 실행 이름을 입력하세요"');
     expect(source).toContain('"inference.namePlaceholder": "추론 실행 이름을 입력하세요"');
   });
+
+  it("uses active queue empty states instead of first-run wording", () => {
+    const source = readFileSync(resolve(sourceRoot, "i18n/LanguageProvider.tsx"), "utf8");
+
+    expect(source).toContain('"trainingQueue.queueEmpty": "표시할 실행이 없습니다."');
+    expect(source).toContain('"trainingQueue.empty": "표시할 학습 작업이 없습니다."');
+    expect(source).toContain('"trainingQueue.inferenceEmpty": "표시할 추론 작업이 없습니다."');
+    expect(source).not.toContain("아직 학습 실행이 없습니다.");
+    expect(source).not.toContain("아직 추론 실행이 없습니다.");
+  });
 });

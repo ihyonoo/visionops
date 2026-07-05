@@ -20,6 +20,7 @@ class Project(TimestampMixin, Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
+    slug: Mapped[str] = mapped_column(String, default="", nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     task_type: Mapped[str] = mapped_column(String, default="detection", nullable=False)
 
@@ -84,6 +85,34 @@ class Job(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String, default="queued", nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class NotificationChannel(TimestampMixin, Base):
+    __tablename__ = "notification_channels"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    channel: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    enabled: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    events: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    last_status: Mapped[str] = mapped_column(String, default="unknown", nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class NotificationDelivery(TimestampMixin, Base):
+    __tablename__ = "notification_deliveries"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    channel_id: Mapped[str | None] = mapped_column(
+        ForeignKey("notification_channels.id"), nullable=True
+    )
+    channel: Mapped[str] = mapped_column(String, nullable=False)
+    event_type: Mapped[str] = mapped_column(String, nullable=False)
+    target_type: Mapped[str] = mapped_column(String, nullable=False)
+    target_id: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

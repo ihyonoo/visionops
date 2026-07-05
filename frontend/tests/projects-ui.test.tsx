@@ -465,6 +465,9 @@ describe("Layout", () => {
     expect(container.querySelector(".sidebar")).toBeNull();
     expect(container.textContent).toContain("VisionOps");
     expect(container.textContent).not.toContain("운영 콘솔");
+    expect(container.querySelector<HTMLImageElement>(".brand__mark img")?.src).toContain(
+      "visionops-logo.svg",
+    );
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='VisionOps']")?.click();
     });
@@ -473,6 +476,7 @@ describe("Layout", () => {
     expect(container.textContent).toContain("데이터셋");
     expect(container.textContent).toContain("학습");
     expect(container.textContent).toContain("추론");
+    expect(container.querySelector("[aria-label='검색']")).toBeNull();
 
     act(() => root.unmount());
     container.remove();
@@ -537,11 +541,39 @@ describe("Layout", () => {
       ".project-sidebar__row[data-hidden='true'] .project-sidebar__project",
     );
     expect(hiddenProjectButton?.disabled).toBe(true);
+    expect(container.querySelector(".header-actions")).not.toBeNull();
+    expect(container.querySelector("header [aria-label='검색']")).toBeNull();
+    expect(container.querySelector("header [aria-label='알림']")).not.toBeNull();
+    expect(container.querySelector("header [aria-label='설정']")).not.toBeNull();
+    expect(container.querySelector(".project-sidebar__footer")).toBeNull();
 
     act(() => {
       hiddenProjectButton?.click();
     });
     expect(onSelectProject).not.toHaveBeenCalledWith("project-a");
+
+    const hiddenGroupToggle = container.querySelector<HTMLButtonElement>(
+      ".project-sidebar__hidden-toggle",
+    );
+    expect(hiddenGroupToggle?.textContent).toContain("숨김 프로젝트");
+    expect(hiddenGroupToggle?.textContent).toContain("1");
+    expect(hiddenGroupToggle?.getAttribute("aria-expanded")).toBe("true");
+
+    act(() => {
+      hiddenGroupToggle?.click();
+    });
+    expect(hiddenGroupToggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      container.querySelector(".project-sidebar__hidden-list .project-sidebar__row[data-hidden='true']"),
+    ).toBeNull();
+
+    act(() => {
+      hiddenGroupToggle?.click();
+    });
+    expect(hiddenGroupToggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      container.querySelector(".project-sidebar__hidden-list .project-sidebar__row[data-hidden='true']"),
+    ).not.toBeNull();
 
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='Beta 숨기기']")?.click();
@@ -554,6 +586,12 @@ describe("Layout", () => {
         ?.click();
     });
     expect(onProjectSortChange).toHaveBeenCalledWith("updated_desc");
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("header [aria-label='설정']")?.click();
+    });
+    expect(container.querySelector("[role='dialog']")?.textContent).toContain("테마");
+    expect(container.querySelector("[role='dialog']")?.textContent).toContain("언어");
 
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='새 프로젝트']")?.click();
@@ -614,6 +652,11 @@ describe("Layout", () => {
     expect(container.querySelector(".project-sidebar")).toBeNull();
     expect(container.querySelector(".project-sidebar-rail")).not.toBeNull();
     expect(localStorage.getItem("visionops:project-sidebar-collapsed")).toBe("true");
+    const railOpenButton = container.querySelector<HTMLButtonElement>(
+      "[aria-label='프로젝트 사이드바 펼치기']",
+    );
+    expect(railOpenButton).not.toBeNull();
+    expect(railOpenButton?.textContent).toContain("→");
 
     const railResizeHandle = container.querySelector<HTMLElement>(
       ".project-sidebar-rail__resize-handle",
@@ -636,22 +679,112 @@ describe("Layout", () => {
     container.remove();
   });
 
-  it("shows feedback when header icon buttons are clicked", () => {
+  it("opens an empty notifications panel when there are no notifications", () => {
     const { container, root } = render(
       <Layout
-        activeSection="projects"
+        activeSection="datasets"
         onNavigate={vi.fn()}
-        title="프로젝트"
+        title="데이터셋"
       >
         <div />
       </Layout>,
     );
 
     act(() => {
-      container.querySelector<HTMLButtonElement>("[aria-label='알림']")?.click();
+      container.querySelector<HTMLButtonElement>("header [aria-label='알림']")?.click();
     });
 
-    expect(container.textContent).toContain("알림이 없습니다.");
+    expect(container.querySelector(".notifications-panel")).not.toBeNull();
+    expect(container.querySelector(".notifications-panel")?.textContent).toContain("알림이 없습니다.");
+    expect(container.querySelector(".notifications-panel")?.textContent).toContain("알림 0개");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("keeps header notifications until the user dismisses them", () => {
+    const onNotificationOpen = vi.fn();
+    const onNotificationDismiss = vi.fn();
+    const { container, root } = render(
+      <Layout
+        activeSection="datasets"
+        notifications={[
+          {
+            body: "라인 A 학습 · 프로젝트 A",
+            createdAt: "2026-07-05T00:02:00Z",
+            id: "training:project-1:run-1:completed",
+            title: "학습 완료",
+            tone: "success",
+          },
+        ]}
+        onNavigate={vi.fn()}
+        onNotificationDismiss={onNotificationDismiss}
+        onNotificationOpen={onNotificationOpen}
+        title="데이터셋"
+      >
+        <div />
+      </Layout>,
+    );
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("header [aria-label='알림']")?.click();
+    });
+
+    expect(container.querySelector(".notifications-panel")?.textContent).toContain("학습 완료");
+    expect(container.querySelector(".notifications-panel")?.textContent).toContain("라인 A 학습 · 프로젝트 A");
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>(".notifications-panel__open")?.click();
+    });
+
+    expect(onNotificationOpen).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "training:project-1:run-1:completed",
+      }),
+    );
+    expect(container.querySelector(".notifications-panel")?.textContent).toContain("학습 완료");
+    expect(onNotificationDismiss).not.toHaveBeenCalled();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>(".notifications-panel__dismiss")?.click();
+    });
+
+    expect(onNotificationDismiss).toHaveBeenCalledWith("training:project-1:run-1:completed");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("opens notification settings from the settings panel", () => {
+    const onOpenNotificationSettings = vi.fn();
+    const { container, root } = render(
+      <ThemeProvider>
+        <Layout
+          activeSection="projects"
+          onNavigate={vi.fn()}
+          onOpenNotificationSettings={onOpenNotificationSettings}
+          title="프로젝트"
+        >
+          <div />
+        </Layout>
+      </ThemeProvider>,
+    );
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='설정']")?.click();
+    });
+
+    const notificationSettingsButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".settings-panel button"),
+    ).find((button) => button.textContent?.includes("알림 설정"));
+
+    expect(notificationSettingsButton).toBeDefined();
+
+    act(() => {
+      notificationSettingsButton?.click();
+    });
+
+    expect(onOpenNotificationSettings).toHaveBeenCalledOnce();
 
     act(() => root.unmount());
     container.remove();
@@ -661,9 +794,9 @@ describe("Layout", () => {
     const { container, root } = render(
       <ThemeProvider>
         <Layout
-          activeSection="projects"
+          activeSection="datasets"
           onNavigate={vi.fn()}
-          title="프로젝트"
+          title="데이터셋"
         >
           <div />
         </Layout>
@@ -673,7 +806,7 @@ describe("Layout", () => {
     expect(container.querySelector(".theme-control")).toBeNull();
 
     act(() => {
-      container.querySelector<HTMLButtonElement>("[aria-label='설정']")?.click();
+      container.querySelector<HTMLButtonElement>("header [aria-label='설정']")?.click();
     });
 
     const themeControl = container.querySelector(".theme-control");
@@ -693,12 +826,14 @@ describe("Layout", () => {
     container.remove();
   });
 
-  it("switches the application language from settings", () => {
+  it("opens notification settings from the settings panel", () => {
+    const onOpenNotificationSettings = vi.fn();
     const { container, root } = render(
       <ThemeProvider>
         <Layout
           activeSection="projects"
           onNavigate={vi.fn()}
+          onOpenNotificationSettings={onOpenNotificationSettings}
           title="프로젝트"
         >
           <div />
@@ -708,6 +843,39 @@ describe("Layout", () => {
 
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='설정']")?.click();
+    });
+
+    const notificationSettingsButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".settings-panel button"),
+    ).find((button) => button.textContent?.includes("알림 설정"));
+
+    expect(notificationSettingsButton).toBeDefined();
+
+    act(() => {
+      notificationSettingsButton?.click();
+    });
+
+    expect(onOpenNotificationSettings).toHaveBeenCalledOnce();
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("switches the application language from settings", () => {
+    const { container, root } = render(
+      <ThemeProvider>
+        <Layout
+          activeSection="datasets"
+          onNavigate={vi.fn()}
+          title="데이터셋"
+        >
+          <div />
+        </Layout>
+      </ThemeProvider>,
+    );
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("header [aria-label='설정']")?.click();
     });
 
     expect(container.textContent).toContain("언어");
@@ -737,6 +905,7 @@ describe("TrainingQueueWidget", () => {
 
   it("summarizes global training runs and opens a selected run", async () => {
     const onOpenRun = vi.fn();
+    const onOpenInferenceRun = vi.fn();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -780,6 +949,63 @@ describe("TrainingQueueWidget", () => {
                 trainer: "ultralytics",
                 updated_at: "2026-07-05T00:01:00Z",
               },
+              {
+                artifact_path: "/tmp/completed",
+                config: {},
+                created_at: "2026-07-05T00:00:00Z",
+                dataset_id: "dataset-1",
+                finished_at: "2026-07-05T00:03:00Z",
+                id: "run-completed",
+                log_path: null,
+                metrics_summary: {},
+                model_name: "yolo11n",
+                name: "라인 완료 학습",
+                project_id: "project-1",
+                split_id: "split-1",
+                started_at: "2026-07-05T00:00:00Z",
+                status: "completed",
+                trainer: "ultralytics",
+                updated_at: "2026-07-05T00:03:00Z",
+              },
+            ]),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/inference-runs")) {
+          return new Response(
+            JSON.stringify([
+              {
+                config: { conf: 0.25, imgsz: 640 },
+                created_at: "2026-07-05T00:00:00Z",
+                finished_at: null,
+                id: "inference-1",
+                input_path: "/tmp/images",
+                input_type: "folder",
+                model_artifact_id: "artifact-1",
+                name: "라인 A 추론",
+                output_path: null,
+                prediction_count: 0,
+                project_id: "project-1",
+                started_at: "2026-07-05T00:01:00Z",
+                status: "running",
+                updated_at: "2026-07-05T00:01:30Z",
+              },
+              {
+                config: { conf: 0.25, imgsz: 640 },
+                created_at: "2026-07-05T00:00:00Z",
+                finished_at: "2026-07-05T00:03:00Z",
+                id: "inference-completed",
+                input_path: "/tmp/images/completed",
+                input_type: "folder",
+                model_artifact_id: "artifact-1",
+                name: "라인 완료 추론",
+                output_path: "/tmp/out",
+                prediction_count: 3,
+                project_id: "project-1",
+                started_at: "2026-07-05T00:01:00Z",
+                status: "completed",
+                updated_at: "2026-07-05T00:03:00Z",
+              },
             ]),
             { headers: { "Content-Type": "application/json" }, status: 200 },
           );
@@ -809,12 +1035,19 @@ describe("TrainingQueueWidget", () => {
             { headers: { "Content-Type": "application/json" }, status: 200 },
           );
         }
+        if (url.endsWith("/api/projects/project-2/inference-runs")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
         return new Response("not found", { status: 404 });
       }),
     );
 
     const { container, root } = renderWithQuery(
       <TrainingQueueWidget
+        onOpenInferenceRun={onOpenInferenceRun}
         onOpenRun={onOpenRun}
         projects={[
           {
@@ -838,17 +1071,65 @@ describe("TrainingQueueWidget", () => {
     );
 
     await waitForAssertion(() => {
-      expect(container.textContent).toContain("학습: 실행 1 · 대기 1 · 실패 0 · 최근 라인 A 학습");
-      expect(container.textContent).toContain("환경: PyTorch 2.8.0 · Ultralytics 8.3.0 · YOLO OK · CPU");
+      const summaryText = container.querySelector(".training-queue-widget__summary")?.textContent ?? "";
+      const productMeta = "VisionOps v0.1.0 · 2026-07-05 · © 2026. Hyunwoo Choi. All rights reserved.";
+      expect(summaryText.indexOf("사용자 환경: PyTorch 2.8.0 · Ultralytics 8.3.0 · YOLO OK · CPU")).toBeLessThan(
+        summaryText.indexOf(productMeta),
+      );
+      expect(summaryText.indexOf(productMeta)).toBeLessThan(
+        summaryText.indexOf("실행 2 · 대기 1 · 실패 0"),
+      );
+      expect(container.textContent).toContain("실행 2 · 대기 1 · 실패 0");
+      expect(container.textContent).not.toContain("추론 1");
+      expect(summaryText).not.toContain("학습:");
+      expect(container.textContent).toContain(productMeta);
+      expect(summaryText).not.toContain("VisionOps Model Version");
+      expect(container.textContent).toContain("사용자 환경: PyTorch 2.8.0 · Ultralytics 8.3.0 · YOLO OK · CPU");
     });
 
     act(() => {
-      container.querySelector<HTMLButtonElement>(".training-queue-widget__summary")?.click();
+      container.querySelector<HTMLButtonElement>(".training-queue-widget__summary-button--queue")?.click();
     });
 
     await waitForAssertion(() => {
-      expect(container.textContent).toContain("라인 A 학습");
-      expect(container.textContent).toContain("라인 B 학습");
+      const panel = container.querySelector(".training-queue-widget__panel");
+      expect(panel).not.toBeNull();
+      const sections = Array.from(panel?.querySelectorAll(".training-queue-widget__section-group") ?? []);
+      expect(sections).toHaveLength(2);
+      expect(sections[0]?.textContent).toContain("학습");
+      expect(sections[0]?.textContent).toContain("라인 A 학습");
+      expect(sections[0]?.textContent).toContain("라인 B 학습");
+      expect(sections[0]?.textContent).not.toContain("라인 완료 학습");
+      expect(sections[0]?.textContent).not.toContain("라인 A 추론");
+      expect(sections[1]?.textContent).toContain("추론");
+      expect(sections[1]?.textContent).toContain("라인 A 추론");
+      expect(sections[1]?.textContent).not.toContain("라인 완료 추론");
+      expect(sections[1]?.textContent).not.toContain("라인 A 학습");
+      expect(panel?.textContent).not.toContain("학습 환경");
+    });
+    expect(container.querySelector(".training-queue-widget__panel")).not.toBeNull();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>(".training-queue-widget__summary-button--runtime")?.click();
+    });
+
+    await waitForAssertion(() => {
+      const panel = container.querySelector(".training-queue-widget__panel");
+      expect(panel).not.toBeNull();
+      expect(panel?.textContent).toContain("학습 환경");
+      expect(panel?.textContent).toContain("PyTorch");
+      expect(panel?.textContent).not.toContain("라인 A 학습");
+      expect(panel?.getAttribute("data-panel")).toBe("runtime");
+    });
+
+    act(() => {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+
+    expect(container.querySelector(".training-queue-widget__panel")).toBeNull();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>(".training-queue-widget__summary-button--queue")?.click();
     });
 
     act(() => {
@@ -858,6 +1139,159 @@ describe("TrainingQueueWidget", () => {
     });
 
     expect(onOpenRun).toHaveBeenCalledWith("project-2", "run-2");
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".training-queue-widget__row"))
+        .find((button) => button.textContent?.includes("라인 A 추론"))
+        ?.click();
+    });
+
+    expect(onOpenInferenceRun).toHaveBeenCalledWith("project-1", "inference-1");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("notifies when an active training run completes", async () => {
+    const onOpenRun = vi.fn();
+    const onNotification = vi.fn();
+    const notificationInstances: Array<{ onclick: (() => void) | null; title: string; options?: NotificationOptions }> = [];
+    const NotificationMock = vi.fn(function MockNotification(
+      this: { onclick: (() => void) | null; title: string; options?: NotificationOptions },
+      title: string,
+      options?: NotificationOptions,
+    ) {
+      this.title = title;
+      this.options = options;
+      this.onclick = null;
+      notificationInstances.push(this);
+    });
+    Object.defineProperty(NotificationMock, "permission", {
+      configurable: true,
+      value: "granted",
+    });
+    vi.stubGlobal("Notification", NotificationMock);
+
+    let trainingRequestCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/runtime/check")) {
+          return new Response(
+            JSON.stringify({
+              devices: [{ available: true, details: {}, id: "cpu", kind: "cpu", label: "CPU" }],
+              install_options: [],
+              install_required: false,
+              packages: {
+                torch: { installed: true, version: "2.8.0" },
+                torchvision: { installed: true, version: "0.23.0" },
+                ultralytics: { installed: true, version: "8.3.0" },
+              },
+              python: {},
+              ready: true,
+              yolo_cli: { installed: true, path: "/usr/local/bin/yolo" },
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs")) {
+          trainingRequestCount += 1;
+          return new Response(
+            JSON.stringify([
+              {
+                artifact_path: trainingRequestCount > 1 ? "/tmp/run-1" : null,
+                config: {},
+                created_at: "2026-07-05T00:00:00Z",
+                dataset_id: "dataset-1",
+                finished_at: trainingRequestCount > 1 ? "2026-07-05T00:02:00Z" : null,
+                id: "run-1",
+                log_path: null,
+                metrics_summary: {},
+                model_name: "yolo26n",
+                name: "라인 A 학습",
+                project_id: "project-1",
+                split_id: "split-1",
+                started_at: "2026-07-05T00:00:00Z",
+                status: trainingRequestCount > 1 ? "completed" : "running",
+                trainer: "ultralytics",
+                updated_at: trainingRequestCount > 1 ? "2026-07-05T00:02:00Z" : "2026-07-05T00:01:00Z",
+              },
+            ]),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const { container, root } = render(
+      <QueryClientProvider client={queryClient}>
+        <TrainingQueueWidget
+          onNotification={onNotification}
+          onOpenRun={onOpenRun}
+          projects={[
+            {
+              created_at: "2026-07-05T00:00:00Z",
+              description: "",
+              id: "project-1",
+              name: "프로젝트 A",
+              task_type: "detection",
+              updated_at: "2026-07-05T00:00:00Z",
+            },
+          ]}
+        />
+      </QueryClientProvider>,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("실행 1 · 대기 0 · 실패 0");
+    });
+
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["projects", "project-1", "training-runs"] });
+    });
+
+    await waitForAssertion(() => {
+      expect(NotificationMock).toHaveBeenCalledWith(
+        "학습 완료",
+        expect.objectContaining({
+          body: "라인 A 학습 · 프로젝트 A",
+          tag: "visionops-training-run-1",
+        }),
+      );
+      expect(container.textContent).toContain("학습 완료");
+      expect(container.textContent).toContain("라인 A 학습");
+      expect(onNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: "라인 A 학습 · 프로젝트 A",
+          id: "training:project-1:run-1:completed",
+          kind: "training",
+          projectId: "project-1",
+          runId: "run-1",
+          title: "학습 완료",
+          tone: "success",
+        }),
+      );
+    });
+
+    act(() => {
+      notificationInstances[0]?.onclick?.();
+    });
+    expect(onOpenRun).toHaveBeenCalledWith("project-1", "run-1");
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".training-queue-widget__notification"))
+        .find((button) => button.textContent?.includes("라인 A 학습"))
+        ?.click();
+    });
+    expect(onOpenRun).toHaveBeenCalledWith("project-1", "run-1");
 
     act(() => root.unmount());
     container.remove();
@@ -889,6 +1323,154 @@ describe("App navigation", () => {
           (button) => button.textContent?.includes("데이터셋"),
         )?.getAttribute("aria-current"),
       ).toBe("page");
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("routes notification settings as a global settings page", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/projects")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/notification-settings")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(null, "", "/settings/notifications");
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(<App />);
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/settings/notifications");
+      expect(container.textContent).toContain("알림 설정");
+      expect(container.textContent).not.toContain("프로젝트가 선택되지 않았습니다");
+      expect(container.querySelector(".project-sidebar")).toBeNull();
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='설정']")?.click();
+    });
+
+    const notificationSettingsButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".settings-panel button"),
+    ).find((button) => button.textContent?.includes("알림 설정"));
+    expect(notificationSettingsButton?.dataset.active).toBe("true");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("returns from notification settings to the previous project section", async () => {
+    const project = {
+      created_at: "2026-07-01T00:00:00Z",
+      description: "",
+      id: "project-1",
+      name: "검수 라인 A",
+      slug: "검수-라인-a",
+      task_type: "detection",
+      updated_at: "2026-07-02T00:00:00Z",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/projects")) {
+          return new Response(JSON.stringify([project]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1")) {
+          return new Response(JSON.stringify(project), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/inference-runs")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/notification-settings")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    window.history.replaceState(null, "", "/");
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(<App />);
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("검수 라인 A");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[data-project-row='project-1']")?.click();
+    });
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/projects/%EA%B2%80%EC%88%98-%EB%9D%BC%EC%9D%B8-a/datasets");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("header [aria-label='설정']")?.click();
+    });
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-panel button"))
+        .find((button) => button.textContent?.includes("알림 설정"))
+        ?.click();
+    });
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/settings/notifications");
+      expect(container.textContent).toContain("알림 설정");
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("돌아가기"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/projects/%EA%B2%80%EC%88%98-%EB%9D%BC%EC%9D%B8-a/datasets");
+      expect(container.textContent).toContain("데이터셋");
     });
 
     act(() => root.unmount());
@@ -1007,7 +1589,9 @@ describe("App navigation", () => {
     });
 
     await waitForAssertion(() => {
-      expect(window.location.pathname).toBe("/projects/project-new/datasets");
+      expect(window.location.pathname).toBe(
+        `/projects/${encodeURIComponent("새-검사-프로젝트")}/datasets`,
+      );
       expect(fetchMock.mock.calls.some(([url, init]) =>
         String(url).endsWith("/api/projects") && init?.method === "POST",
       )).toBe(true);
@@ -1029,6 +1613,7 @@ describe("App navigation", () => {
               description: "라인 결함 탐지",
               id: "project-1",
               name: "검수 라인 A",
+              slug: "검수-라인-a",
               task_type: "detection",
               updated_at: "2026-07-02T00:00:00Z",
             }),
@@ -1043,6 +1628,7 @@ describe("App navigation", () => {
                 description: "라인 결함 탐지",
                 id: "project-1",
                 name: "검수 라인 A",
+                slug: "검수-라인-a",
                 task_type: "detection",
                 updated_at: "2026-07-02T00:00:00Z",
               },
@@ -1058,6 +1644,7 @@ describe("App navigation", () => {
               id: "project-1",
               name: "라인 A",
               root_path: "/tmp/project-1",
+              slug: "라인-a",
               updated_at: "2026-07-01T00:00:00Z",
             }),
             { headers: { "Content-Type": "application/json" }, status: 200 },
@@ -1115,7 +1702,7 @@ describe("App navigation", () => {
     });
 
     await waitForAssertion(() => {
-      expect(window.location.pathname).toBe("/projects/project-1/datasets");
+      expect(window.location.pathname).toBe(`/projects/${encodeURIComponent("검수-라인-a")}/datasets`);
       expect(container.textContent).toContain("데이터셋");
     });
 
@@ -1126,7 +1713,7 @@ describe("App navigation", () => {
     });
 
     await waitForAssertion(() => {
-      expect(window.location.pathname).toBe("/projects/project-1/training");
+      expect(window.location.pathname).toBe(`/projects/${encodeURIComponent("검수-라인-a")}/training`);
     });
 
     act(() => {
@@ -1136,7 +1723,7 @@ describe("App navigation", () => {
     });
 
     await waitForAssertion(() => {
-      expect(window.location.pathname).toBe("/projects/project-1/inference");
+      expect(window.location.pathname).toBe(`/projects/${encodeURIComponent("검수-라인-a")}/inference`);
     });
 
     act(() => {
@@ -1144,7 +1731,7 @@ describe("App navigation", () => {
     });
 
     await waitForAssertion(() => {
-      expect(window.location.pathname).toBe("/projects/project-1/training");
+      expect(window.location.pathname).toBe(`/projects/${encodeURIComponent("검수-라인-a")}/training`);
       expect(
         Array.from(container.querySelectorAll<HTMLButtonElement>(".top-nav__button")).find((button) =>
           button.textContent?.includes("학습"),
@@ -1157,7 +1744,7 @@ describe("App navigation", () => {
     });
 
     await waitForAssertion(() => {
-      expect(window.location.pathname).toBe("/projects/project-1/datasets");
+      expect(window.location.pathname).toBe(`/projects/${encodeURIComponent("검수-라인-a")}/datasets`);
       expect(
         Array.from(container.querySelectorAll<HTMLButtonElement>(".top-nav__button")).find((button) =>
           button.textContent?.includes("데이터셋"),
@@ -1250,6 +1837,7 @@ describe("ProjectDetailPage", () => {
     });
 
     const datasetRow = container.querySelector<HTMLElement>(".dataset-row");
+    expect(datasetRow?.dataset.selected).toBeUndefined();
     expect(datasetRow?.textContent).toContain("이미지 12");
     expect(datasetRow?.textContent).toContain("라벨 11");
     expect(datasetRow?.textContent).toContain("클래스 4");
@@ -1262,11 +1850,27 @@ describe("ProjectDetailPage", () => {
     expect(datasetRow?.textContent).not.toContain("유효성 검사 성공");
     expect(container.textContent).not.toContain("요약 지표");
 
+    act(() => {
+      datasetRow?.click();
+    });
+    expect(datasetRow?.dataset.selected).toBeUndefined();
+
+    act(() => {
+      datasetRow?.click();
+    });
+    expect(datasetRow?.dataset.selected).toBeUndefined();
+
     act(() => root.unmount());
     container.remove();
   });
 
   it("toggles split controls from each dataset row", async () => {
+    const managedProjectRoot = "/tmp/vision_ops_data/projects/0123456789abcdef01234567";
+    const clipboardWriteText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWriteText },
+    });
     const dataset = {
       class_names: ["scratch"],
       created_at: "2026-07-02T00:00:00Z",
@@ -1276,18 +1880,18 @@ describe("ProjectDetailPage", () => {
       label_count: 10,
       name: "dataset",
       project_id: "project-1",
-      source_path: "/data/project-1",
+      source_path: `${managedProjectRoot}/datasets/dataset-1`,
       validation_status: "valid",
       validation_summary: { errors: [], warnings: [] },
     };
     const split = {
       created_at: "2026-07-02T00:00:00Z",
       dataset_id: "dataset-1",
-      dataset_yaml_path: "/tmp/data.yaml",
+      dataset_yaml_path: `${managedProjectRoot}/datasets/dataset-1/splits/split-1/data.yaml`,
       id: "split-1",
       name: "기본 split",
       seed: 42,
-      split_path: "/tmp/split",
+      split_path: `${managedProjectRoot}/datasets/dataset-1/splits/split-1`,
       train_count: 8,
       train_ratio: 0.8,
       test_count: 0,
@@ -1295,10 +1899,17 @@ describe("ProjectDetailPage", () => {
       val_count: 2,
       val_ratio: 0.2,
     };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        if (url.endsWith("/api/local-files/open") && init?.method === "POST") {
+          return new Response(
+            JSON.stringify({
+              opened_path: JSON.parse(String(init.body)).path,
+              requested_path: JSON.parse(String(init.body)).path,
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
         if (url.endsWith("/api/projects/project-1")) {
           return new Response(
             JSON.stringify({
@@ -1331,8 +1942,8 @@ describe("ProjectDetailPage", () => {
           });
         }
         return new Response("not found", { status: 404 });
-      }),
-    );
+      });
+    vi.stubGlobal("fetch", fetchMock);
 
     const onTabChange = vi.fn();
     const { container, root } = renderWithQuery(
@@ -1344,6 +1955,7 @@ describe("ProjectDetailPage", () => {
     });
 
     const datasetRow = container.querySelector<HTMLElement>(".dataset-row");
+    expect(datasetRow?.dataset.selected).toBeUndefined();
     expect(datasetRow?.textContent).not.toContain("기본 split");
     expect(datasetRow?.textContent).toContain("Split 목록 열기 · 1개");
     const datasetActions = datasetRow?.querySelector<HTMLElement>(".dataset-row__actions");
@@ -1357,29 +1969,117 @@ describe("ProjectDetailPage", () => {
     expect(container.querySelectorAll(".split-form")).toHaveLength(0);
 
     act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset 데이터셋 작업']")?.click();
+    });
+    const datasetMenu = container.querySelector<HTMLElement>(".dataset-row__menu-popover");
+    expect(datasetMenu?.textContent).toContain("폴더 열기");
+    expect(datasetMenu?.textContent).toContain("경로 복사");
+    await act(async () => {
+      Array.from(datasetMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("경로 복사"))
+        ?.click();
+    });
+    expect(clipboardWriteText).toHaveBeenCalledWith(dataset.source_path);
+    await act(async () => {
+      Array.from(datasetMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("폴더 열기"))
+        ?.click();
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/api/local-files/open") &&
+          init?.method === "POST" &&
+          JSON.parse(String(init.body)).path === dataset.source_path,
+      ),
+    ).toBe(true);
+
+    act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
     });
 
     const splitDetail = container.querySelector<HTMLElement>(".dataset-row-detail");
     expect(splitDetail?.closest(".dataset-list")).not.toBeNull();
     expect(datasetRow?.textContent).toContain("Split 목록 접기 · 1개");
+    expect(datasetRow?.dataset.selected).toBeUndefined();
     expect(splitDetail?.textContent).toContain("Split 생성");
     expect(splitDetail?.textContent).toContain("기본 split");
     expect(splitDetail?.textContent).toContain("8 / 2 / 0");
     expect(splitDetail?.textContent).toContain("이 Split으로 학습");
     expect(splitDetail?.querySelector("[aria-label='기본 split split 작업']")).not.toBeNull();
+    expect(splitDetail?.querySelector(".split-row > svg")).toBeNull();
     expect(container.querySelectorAll(".split-form")).toHaveLength(0);
 
     act(() => {
-      Array.from(splitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+      splitDetail?.querySelector<HTMLButtonElement>("[aria-label='기본 split split 작업']")?.click();
+    });
+    const splitMenu = splitDetail?.querySelector<HTMLElement>(".dataset-row__menu-popover");
+    expect(splitMenu?.textContent).toContain("폴더 열기");
+    expect(splitMenu?.textContent).toContain("경로 복사");
+    await act(async () => {
+      Array.from(splitMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("경로 복사"))
+        ?.click();
+    });
+    expect(clipboardWriteText).toHaveBeenCalledWith(split.split_path);
+    await act(async () => {
+      Array.from(splitMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("폴더 열기"))
+        ?.click();
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/api/local-files/open") &&
+          init?.method === "POST" &&
+          JSON.parse(String(init.body)).path === split.split_path,
+      ),
+    ).toBe(true);
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+
+    expect(container.querySelector(".dataset-row-detail")).toBeNull();
+    expect(datasetRow?.dataset.selected).toBeUndefined();
+
+    act(() => {
+      datasetRow?.click();
+    });
+
+    expect(datasetRow?.dataset.selected).toBeUndefined();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+
+    expect(container.querySelector(".dataset-row-detail")).not.toBeNull();
+    expect(datasetRow?.dataset.selected).toBeUndefined();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+
+    expect(container.querySelector(".dataset-row-detail")).toBeNull();
+    expect(datasetRow?.dataset.selected).toBeUndefined();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+
+    const selectedSplitDetail = container.querySelector<HTMLElement>(".dataset-row-detail");
+
+    act(() => {
+      Array.from(selectedSplitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
         .find((button) => button.textContent?.includes("이 Split으로 학습"))
         ?.click();
     });
 
     expect(onTabChange).toHaveBeenCalledWith("training");
+    expect(datasetRow?.dataset.selected).toBeUndefined();
 
     act(() => {
-      Array.from(splitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+      Array.from(selectedSplitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
         .find((button) => button.textContent?.includes("Split 생성"))
         ?.click();
     });
@@ -1390,12 +2090,6 @@ describe("ProjectDetailPage", () => {
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='Split 생성 닫기']")?.click();
     });
-
-    act(() => {
-      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
-    });
-
-    expect(container.querySelector(".dataset-row-detail")).toBeNull();
 
     act(() => root.unmount());
     container.remove();
@@ -1809,7 +2503,7 @@ describe("ProjectDetailPage", () => {
     container.remove();
   });
 
-  it("keeps a newly created dataset selected before the list refetch finishes", async () => {
+  it("shows a newly created dataset before the list refetch finishes", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const existingDataset = {
@@ -1954,10 +2648,9 @@ describe("ProjectDetailPage", () => {
         ).length,
       ).toBeGreaterThanOrEqual(2);
 
-      const selectedRows = Array.from(container.querySelectorAll<HTMLElement>(".dataset-row")).filter(
-        (row) => row.dataset.selected === "true",
-      );
-      expect(selectedRows[0]?.textContent).toContain("새 데이터셋");
+      const datasetRows = Array.from(container.querySelectorAll<HTMLElement>(".dataset-row"));
+      expect(datasetRows[0]?.textContent).toContain("새 데이터셋");
+      expect(container.querySelector(".dataset-row[data-selected='true']")).toBeNull();
       expect(container.querySelector("[role='dialog']")).toBeNull();
     });
 
@@ -2187,6 +2880,23 @@ describe("ProjectDetailPage", () => {
     );
 
     await waitForAssertion(() => {
+      expect(container.textContent).toContain("라인 A 데이터셋 / Split A");
+      expect(container.textContent).toContain("선택된 학습 실행이 없습니다.");
+      expect(container.textContent).not.toContain("split-a live log");
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          String(url).endsWith("/api/projects/project-1/training-runs/run-a/logs?tail=200"),
+        ),
+      ).toBe(false);
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".training-split-option"))
+        .find((button) => button.textContent?.includes("Split A"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
       expect(container.textContent).toContain("Split A 학습");
       expect(container.textContent).toContain("split-a live log");
       expect(container.textContent).not.toContain("Split B 학습");
@@ -2195,6 +2905,18 @@ describe("ProjectDetailPage", () => {
           String(url).endsWith("/api/projects/project-1/training-runs/run-a/logs?tail=200"),
         ),
       ).toBe(true);
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".training-split-option"))
+        .find((button) => button.textContent?.includes("Split A"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("선택된 학습 실행이 없습니다.");
+      expect(container.querySelector(".training-terminal-title")?.textContent).not.toContain("Split A 학습");
+      expect(container.querySelector(".log-viewer")).toBeNull();
     });
 
     act(() => {
@@ -2400,6 +3122,8 @@ describe("ProjectDetailPage", () => {
       expect(container.textContent).toContain("C 실험");
       expect(container.textContent).toContain("정렬");
       expect(container.textContent).toContain("mAP50 높은순");
+      expect(container.textContent).toContain("오래된순");
+      expect(container.textContent).not.toContain("상태순");
       expect(container.querySelector(".training-result-card")).not.toBeNull();
       expect(
         container.querySelector<HTMLImageElement>("img[data-training-thumbnail='run-a']")?.src,
@@ -2429,6 +3153,12 @@ describe("ProjectDetailPage", () => {
 
     act(() => {
       (sortSelect as HTMLSelectElement).value = "name";
+      Simulate.change(sortSelect as HTMLSelectElement);
+    });
+    expect(cardTitles()).toEqual(["A 실험", "B 실험", "C 실험"]);
+
+    act(() => {
+      (sortSelect as HTMLSelectElement).value = "oldest";
       Simulate.change(sortSelect as HTMLSelectElement);
     });
     expect(cardTitles()).toEqual(["A 실험", "B 실험", "C 실험"]);
@@ -2621,6 +3351,14 @@ describe("ProjectDetailPage", () => {
       openDrawerButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
         (button) => button.textContent?.includes("새 학습 실행"),
       );
+      expect(openDrawerButton?.disabled).toBe(true);
+    });
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".training-split-option"))
+        .find((button) => button.textContent?.includes("기본 split"))
+        ?.click();
+    });
+    await waitForAssertion(() => {
       expect(openDrawerButton?.disabled).toBe(false);
     });
     act(() => {
@@ -2687,6 +3425,197 @@ describe("ProjectDetailPage", () => {
           return String(url).endsWith("/api/projects/project-1/training-runs") && init?.method === "POST";
         }),
       ).toBe(true);
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("offers current YOLO detection models and tunes defaults for larger selections", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const dataset = {
+        class_names: ["scratch"],
+        created_at: "2026-07-02T00:00:00Z",
+        format: "yolo",
+        id: "dataset-1",
+        image_count: 120,
+        label_count: 120,
+        name: "라인 A 데이터셋",
+        project_id: "project-1",
+        source_path: "/data/project-1",
+        validation_status: "valid",
+        validation_summary: { errors: [], warnings: [] },
+      };
+      const split = {
+        created_at: "2026-07-02T00:00:00Z",
+        dataset_id: "dataset-1",
+        dataset_yaml_path: "/tmp/data.yaml",
+        id: "split-1",
+        name: "기본 split",
+        seed: 42,
+        split_path: "/tmp/split",
+        train_count: 96,
+        train_ratio: 0.8,
+        test_count: 0,
+        test_ratio: 0,
+        val_count: 24,
+        val_ratio: 0.2,
+      };
+      const runtime = {
+        devices: [{ available: true, details: {}, id: "cpu", kind: "cpu", label: "CPU" }],
+        install_options: [],
+        install_required: false,
+        packages: {
+          torch: { installed: true, version: "2.5.0" },
+          torchvision: { installed: true, version: "0.20.0" },
+          ultralytics: { installed: true, version: "8.3.0" },
+        },
+        python: { executable: "/usr/bin/python", version: "3.11.0" },
+        ready: true,
+        yolo_cli: { installed: true, path: "/tmp/yolo" },
+      };
+
+      if (url.endsWith("/api/runtime/check")) {
+        return new Response(JSON.stringify(runtime), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1")) {
+        return new Response(
+          JSON.stringify({
+            created_at: "2026-07-01T00:00:00Z",
+            description: "",
+            id: "project-1",
+            name: "검수 라인 A",
+            task_type: "detection",
+            updated_at: "2026-07-02T00:00:00Z",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      if (url.endsWith("/api/projects/project-1/datasets")) {
+        return new Response(JSON.stringify([dataset]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-1")) {
+        return new Response(JSON.stringify(dataset), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-1/splits")) {
+        return new Response(JSON.stringify([split]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/training-runs/preflight")) {
+        const body = JSON.parse(String(init?.body)) as {
+          config: Record<string, unknown>;
+          model_name: string;
+        };
+        expect(body.model_name).toBe("yolo26x");
+        expect(body.config.batch).toBe(4);
+        expect(body.config.imgsz).toBe(640);
+        expect(body.config.epochs).toBe(100);
+        return new Response(
+          JSON.stringify({
+            blocking_issues: [],
+            can_start: true,
+            command_preview: {
+              argv: [
+                "/tmp/yolo",
+                "detect",
+                "train",
+                "model=yolo26x.pt",
+                "data=/tmp/data.yaml",
+                "epochs=100",
+                "batch=4",
+                "name=<new-run-id>",
+              ],
+              kind: "yolo_cli",
+              shell:
+                "/tmp/yolo detect train model=yolo26x.pt data=/tmp/data.yaml epochs=100 batch=4 'name=<new-run-id>'",
+            },
+            devices: runtime.devices,
+            recommendations: [],
+            runtime,
+            selected_device: runtime.devices[0],
+            suggested_config: body.config,
+            warnings: [],
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      if (url.endsWith("/api/projects/project-1/training-runs")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="training" onTabChange={vi.fn()} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("라인 A 데이터셋 / 기본 split");
+    });
+
+    const openDrawerButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("새 학습 실행"),
+    );
+    expect(openDrawerButton?.disabled).toBe(true);
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".training-split-option"))
+        .find((button) => button.textContent?.includes("기본 split"))
+        ?.click();
+    });
+    act(() => {
+      openDrawerButton?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.querySelector("[role='dialog']")).not.toBeNull();
+    });
+
+    const modelSelect = Array.from(container.querySelectorAll<HTMLSelectElement>("select")).find(
+      (select) =>
+        Array.from(select.options).some((option) => option.value === "yolo26x") &&
+        Array.from(select.options).some((option) => option.value === "yolov10m"),
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("yolo26n");
+    expect(Array.from(modelSelect?.options ?? []).map((option) => option.value)).toEqual(
+      expect.arrayContaining(["yolo26n", "yolo26x", "yolo11l", "yolov10m", "yolov9e", "yolov8x"]),
+    );
+
+    const nameInput = Array.from(container.querySelectorAll<HTMLInputElement>("input")).find(
+      (input) => input.placeholder === "학습 실행 이름을 입력하세요",
+    );
+    const trainingForm = nameInput?.closest("form");
+    act(() => {
+      setSelectValue(modelSelect as HTMLSelectElement, "yolo26x");
+      setInputValue(nameInput!, "large model run");
+    });
+
+    const numericInputs = Array.from(trainingForm?.querySelectorAll<HTMLInputElement>("input[type='number']") ?? []);
+    expect(numericInputs.find((input) => input.previousSibling?.textContent?.includes("batch"))?.value).toBe("4");
+    expect(numericInputs.find((input) => input.previousSibling?.textContent?.includes("imgsz"))?.value).toBe("640");
+
+    await act(async () => {
+      if (trainingForm) Simulate.submit(trainingForm);
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("model=yolo26x.pt");
     });
 
     act(() => root.unmount());
@@ -2865,7 +3794,273 @@ describe("ProjectDetailPage", () => {
     container.remove();
   });
 
+  it("shows a newly created inference run immediately from the mutation response", async () => {
+    const completedRun = {
+      artifact_path: "/tmp/train/run-1",
+      config: {},
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      finished_at: "2026-07-02T00:10:00Z",
+      id: "run-1",
+      log_path: "/tmp/train/run-1/logs/stdout.log",
+      metrics_summary: {},
+      model_name: "yolo26n",
+      name: "완료 학습",
+      project_id: "project-1",
+      split_id: "split-1",
+      started_at: "2026-07-02T00:00:00Z",
+      status: "completed",
+      trainer: "ultralytics",
+      updated_at: "2026-07-02T00:10:00Z",
+    };
+    const artifact = {
+      created_at: "2026-07-02T00:10:00Z",
+      id: "artifact-best",
+      kind: "best",
+      metrics_snapshot: {},
+      path: "/tmp/train/run-1/weights/best.pt",
+      training_run_id: "run-1",
+      updated_at: "2026-07-02T00:10:00Z",
+    };
+    const createdInferenceRun = {
+      config: { conf: 0.25, imgsz: 640 },
+      created_at: "2026-07-02T00:11:00Z",
+      finished_at: null,
+      id: "inference-created",
+      input_path: "/tmp/images",
+      input_type: "folder",
+      model_artifact_id: artifact.id,
+      name: "즉시 표시 추론",
+      output_path: null,
+      prediction_count: 0,
+      project_id: "project-1",
+      started_at: null,
+      status: "queued",
+      updated_at: "2026-07-02T00:11:00Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/projects/project-1")) {
+        return new Response(
+          JSON.stringify({
+            created_at: "2026-07-01T00:00:00Z",
+            description: "",
+            id: "project-1",
+            name: "검수 라인 A",
+            task_type: "detection",
+            updated_at: "2026-07-02T00:00:00Z",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      if (url.endsWith("/api/projects/project-1/datasets")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/training-runs")) {
+        return new Response(JSON.stringify([completedRun]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/training-runs/run-1/artifacts")) {
+        return new Response(JSON.stringify([artifact]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/inference-runs/upload") && init?.method === "POST") {
+        return new Response(JSON.stringify(createdInferenceRun), {
+          headers: { "Content-Type": "application/json" },
+          status: 201,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/inference-runs")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="inference" onTabChange={vi.fn()} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("추론 실행 목록");
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("새 추론 실행"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("완료 학습 / best");
+    });
+
+    const nameInput = Array.from(container.querySelectorAll<HTMLInputElement>("input")).find(
+      (input) => input.placeholder === "추론 실행 이름을 입력하세요",
+    );
+    const inputFiles = container.querySelector<HTMLInputElement>("[aria-label='추론 이미지 폴더 선택']");
+    const form = nameInput?.closest("form");
+
+    act(() => {
+      setInputValue(nameInput!, "즉시 표시 추론");
+      setFileInput(inputFiles!, [
+        fileWithRelativePath("part-a.jpg", "images/part-a.jpg", "image-a", "image/jpeg"),
+      ]);
+    });
+    await act(async () => {
+      if (form) Simulate.submit(form);
+    });
+
+    await waitForAssertion(() => {
+      expect(container.querySelector("[role='dialog']")).toBeNull();
+      expect(container.textContent).toContain("즉시 표시 추론");
+      expect(container.textContent).toContain("inference-created");
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("keeps training unselected until the user selects a split", async () => {
+    const dataset = {
+      class_names: ["scratch"],
+      created_at: "2026-07-02T00:00:00Z",
+      format: "yolo",
+      id: "dataset-1",
+      image_count: 10,
+      label_count: 10,
+      name: "라인 A 데이터셋",
+      project_id: "project-1",
+      source_path: "/data/project-1",
+      validation_status: "valid",
+      validation_summary: { errors: [], warnings: [] },
+    };
+    const split = {
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      dataset_yaml_path: "/tmp/data.yaml",
+      id: "split-1",
+      name: "기본 split",
+      seed: 42,
+      split_path: "/tmp/split",
+      train_count: 8,
+      train_ratio: 0.8,
+      test_count: 0,
+      test_ratio: 0,
+      val_count: 2,
+      val_ratio: 0.2,
+    };
+    const run = {
+      artifact_path: "/tmp/train/run-1",
+      config: {},
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      finished_at: "2026-07-02T00:10:00Z",
+      id: "run-1",
+      log_path: "/tmp/train/run-1/logs/stdout.log",
+      metrics_summary: {},
+      model_name: "yolov8n",
+      name: "완료 학습",
+      project_id: "project-1",
+      split_id: "split-1",
+      started_at: "2026-07-02T00:00:00Z",
+      status: "completed",
+      trainer: "ultralytics",
+      updated_at: "2026-07-02T00:10:00Z",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/runtime/check")) {
+          return new Response(
+            JSON.stringify({
+              devices: [{ available: true, details: {}, id: "cpu", kind: "cpu", label: "CPU" }],
+              install_options: [],
+              install_required: false,
+              packages: {
+                torch: { installed: true, version: "2.5.0" },
+                torchvision: { installed: true, version: "0.20.0" },
+                ultralytics: { installed: true, version: "8.3.0" },
+              },
+              python: {},
+              ready: true,
+              yolo_cli: { installed: true, path: "/tmp/yolo" },
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/datasets")) {
+          return new Response(JSON.stringify([dataset]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets/dataset-1")) {
+          return new Response(JSON.stringify(dataset), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets/dataset-1/splits")) {
+          return new Response(JSON.stringify([split]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs")) {
+          return new Response(JSON.stringify([run]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="training" onTabChange={vi.fn()} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("라인 A 데이터셋 / 기본 split");
+      expect(container.textContent).toContain("선택된 학습 실행이 없습니다.");
+      expect(container.querySelector(".training-terminal-title")?.textContent).not.toContain("완료 학습");
+      expect(container.querySelector(".log-viewer")).toBeNull();
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".training-split-option"))
+        .find((button) => button.textContent?.includes("기본 split"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.querySelector(".training-terminal-title")?.textContent).toContain("완료 학습");
+      expect(container.querySelector(".log-viewer")).not.toBeNull();
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
   it("shows inference runs as thumbnails with toggle details and delete actions", async () => {
+    const managedProjectRoot = "/tmp/vision_ops_data/projects/0123456789abcdef01234567";
+    const clipboardWriteText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWriteText },
+    });
     const completedTrainingRun = {
       artifact_path: "/tmp/train/run-1",
       config: {},
@@ -2902,7 +4097,7 @@ describe("ProjectDetailPage", () => {
       input_type: "folder",
       model_artifact_id: artifact.id,
       name: "폴더 추론",
-      output_path: "/tmp/outputs/folder-run",
+      output_path: `${managedProjectRoot}/runs/inference/folder-run`,
       prediction_count: 1,
       project_id: "project-1",
       started_at: "2026-07-02T00:11:00Z",
@@ -2915,7 +4110,7 @@ describe("ProjectDetailPage", () => {
       input_path: "/tmp/images/single.jpg",
       input_type: "image",
       name: "단일 추론",
-      prediction_count: 0,
+      prediction_count: 1,
     };
     const prediction = {
       class_names: ["scratch"],
@@ -2940,6 +4135,15 @@ describe("ProjectDetailPage", () => {
     let inferenceRuns = [folderRun, imageRun];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.endsWith("/api/local-files/open") && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            opened_path: JSON.parse(String(init.body)).path,
+            requested_path: JSON.parse(String(init.body)).path,
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
       if (url.endsWith("/api/projects/project-1")) {
         return new Response(
           JSON.stringify({
@@ -3008,11 +4212,58 @@ describe("ProjectDetailPage", () => {
       expect(container.textContent).toContain("폴더 추론");
       expect(container.textContent).toContain("폴더");
       expect(container.textContent).toContain("batch");
+      expect(container.textContent).toContain("1개 이미지");
       expect(container.textContent).toContain("단일 추론");
       expect(container.textContent).toContain("단일 이미지");
       expect(container.textContent).toContain("single.jpg");
+      expect(container.textContent).not.toContain("1개 예측");
       expect(container.querySelector(".inference-run-thumbnail img")).not.toBeNull();
     });
+    expect(container.querySelector(".inference-run-row[data-selected='true']")).toBeNull();
+
+    const folderRunRow = Array.from(
+      container.querySelectorAll<HTMLElement>(".inference-run-row"),
+    ).find((row) => row.textContent?.includes("폴더 추론"));
+    expect(folderRunRow?.textContent).not.toContain("폴더 열기");
+    expect(folderRunRow?.textContent).not.toContain("경로 복사");
+    expect(folderRunRow?.querySelector("[aria-label='폴더 추론 추론 실행 작업']")).not.toBeNull();
+    act(() => {
+      folderRunRow
+        ?.querySelector<HTMLButtonElement>("[aria-label='폴더 추론 추론 실행 작업']")
+        ?.click();
+    });
+    const inferenceRunMenu = folderRunRow?.querySelector<HTMLElement>(".dataset-row__menu-popover");
+    expect(inferenceRunMenu?.textContent).toContain("폴더 열기");
+    expect(inferenceRunMenu?.textContent).toContain("경로 복사");
+    expect(inferenceRunMenu?.textContent).toContain("삭제");
+    await act(async () => {
+      Array.from(inferenceRunMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("경로 복사"))
+        ?.click();
+    });
+    expect(clipboardWriteText).toHaveBeenCalledWith(folderRun.output_path);
+    await act(async () => {
+      Array.from(inferenceRunMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("폴더 열기"))
+        ?.click();
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/api/local-files/open") &&
+          init?.method === "POST" &&
+          JSON.parse(String(init.body)).path === folderRun.output_path,
+      ),
+    ).toBe(true);
+
+    const folderRunSummary = Array.from(
+      container.querySelectorAll<HTMLElement>(".inference-run-summary"),
+    ).find((summary) => summary.textContent?.includes("폴더 추론"));
+    expect(folderRunSummary?.tagName).not.toBe("BUTTON");
+    act(() => {
+      folderRunSummary?.click();
+    });
+    expect(container.querySelector(".inference-run-row[data-selected='true']")).toBeNull();
 
     expect(container.textContent).not.toContain("scratch");
     act(() => {
@@ -3021,11 +4272,21 @@ describe("ProjectDetailPage", () => {
         ?.click();
     });
     await waitForAssertion(() => {
-      expect(container.textContent).toContain("scratch");
+      expect(container.textContent).not.toContain("추론 결과");
+      expect(container.textContent).not.toContain("scratch");
+      expect(container.querySelector(".prediction-grid--embedded img")).not.toBeNull();
     });
 
+    const imageRunRow = Array.from(
+      container.querySelectorAll<HTMLElement>(".inference-run-row"),
+    ).find((row) => row.textContent?.includes("단일 추론"));
     act(() => {
-      container.querySelector<HTMLButtonElement>("[aria-label='단일 추론 삭제']")?.click();
+      imageRunRow
+        ?.querySelector<HTMLButtonElement>("[aria-label='단일 추론 추론 실행 작업']")
+        ?.click();
+    });
+    act(() => {
+      imageRunRow?.querySelector<HTMLButtonElement>("[aria-label='단일 추론 삭제']")?.click();
     });
     await waitForAssertion(() => {
       expect(container.textContent).not.toContain("단일 추론");
@@ -3172,16 +4433,35 @@ describe("ProjectDetailPage", () => {
     });
 
     await waitForAssertion(() => {
-      expect(container.textContent).toContain("추론 결과");
-      expect(container.textContent).toContain("part.jpg");
-      expect(container.textContent).toContain("scratch");
-      expect(container.textContent).toContain("0.91");
+      expect(container.textContent).not.toContain("추론 결과");
+      expect(container.textContent).not.toContain("part.jpg");
+      expect(container.textContent).not.toContain("scratch");
+      expect(container.textContent).not.toContain("0.91");
       expect(
         container.querySelector<HTMLImageElement>(
           "img[src*='/api/projects/project-1/inference-runs/inference-1/predictions/prediction-1/image?v=']",
         ),
       ).not.toBeNull();
+      expect(container.querySelector(".training-image-modal")).toBeNull();
     });
+
+    const predictionImageButton = container.querySelector<HTMLButtonElement>(
+      ".prediction-card__image-button",
+    );
+    expect(predictionImageButton).not.toBeNull();
+    act(() => {
+      Simulate.click(predictionImageButton as HTMLButtonElement);
+    });
+    expect(container.querySelector(".training-image-modal")).not.toBeNull();
+    expect(
+      container.querySelector<HTMLImageElement>(
+        ".training-image-modal img[src*='/api/projects/project-1/inference-runs/inference-1/predictions/prediction-1/image?v=']",
+      ),
+    ).not.toBeNull();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(container.querySelector(".training-image-modal")).toBeNull();
 
     act(() => root.unmount());
     container.remove();
@@ -3312,7 +4592,7 @@ describe("ProjectDetailPage", () => {
 
     await waitForAssertion(() => {
       expect(container.textContent).toContain("결과 이미지 없음");
-      expect(container.textContent).toContain("part.jpg");
+      expect(container.textContent).not.toContain("part.jpg");
       expect(
         container.querySelector<HTMLImageElement>(
           "img[src$='/api/projects/project-1/inference-runs/inference-1/predictions/prediction-1/image']",
@@ -3324,7 +4604,7 @@ describe("ProjectDetailPage", () => {
     container.remove();
   });
 
-  it("keeps the training detail inside the selected status filter", async () => {
+  it("does not auto-open a training detail from existing runs", async () => {
     const completedRun = {
       artifact_path: null,
       config: {
@@ -3470,8 +4750,9 @@ describe("ProjectDetailPage", () => {
       expect(container.querySelector(".training-terminal-panel h2")?.textContent).toBe(
         "실시간 학습 터미널",
       );
-      expect(container.querySelector(".training-terminal-title")?.textContent).toContain("완료 학습");
-      expect(container.textContent).toContain("학습 결과 보기");
+      expect(container.querySelector(".training-terminal-title")?.textContent).not.toContain("완료 학습");
+      expect(container.textContent).toContain("선택된 학습 실행이 없습니다.");
+      expect(container.textContent).not.toContain("학습 결과 보기");
       expect(container.textContent).not.toContain("학습 실행 목록");
     });
 
@@ -3592,12 +4873,28 @@ describe("TrainingRunPage", () => {
   });
 
   it("prioritizes backend best metric summary cards before last epoch", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const managedProjectRoot = "/tmp/vision_ops_data/projects/0123456789abcdef01234567";
+    const artifactPath = `${managedProjectRoot}/runs/train/run-1`;
+    const clipboardWriteText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWriteText },
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        if (url.endsWith("/api/local-files/open") && init?.method === "POST") {
+          return new Response(
+            JSON.stringify({
+              opened_path: JSON.parse(String(init.body)).path,
+              requested_path: JSON.parse(String(init.body)).path,
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
         if (url.endsWith("/api/projects/project-1/training-runs/run-1")) {
           return new Response(
             JSON.stringify({
-              artifact_path: "/tmp/train/run-1",
+              artifact_path: artifactPath,
               config: {
                 batch: 16,
                 device: "cpu",
@@ -3691,13 +4988,23 @@ describe("TrainingRunPage", () => {
       });
     vi.stubGlobal("fetch", fetchMock);
 
+    const onBackToList = vi.fn();
     const { container, root } = renderWithQuery(
-      <TrainingRunPage projectId="project-1" runId="run-1" />,
+      <TrainingRunPage onBackToList={onBackToList} projectId="project-1" runId="run-1" />,
     );
 
     await waitForAssertion(() => {
       expect(container.querySelectorAll(".training-detail__summary span").length).toBeGreaterThanOrEqual(3);
     });
+
+    const backToListButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("목록으로 돌아가기"),
+    );
+    expect(backToListButton).not.toBeNull();
+    act(() => {
+      Simulate.click(backToListButton as HTMLButtonElement);
+    });
+    expect(onBackToList).toHaveBeenCalledTimes(1);
 
     const metricLabels = Array.from(container.querySelectorAll(".training-detail__summary span")).map(
       (element) => element.textContent,
@@ -3729,6 +5036,12 @@ describe("TrainingRunPage", () => {
         container.querySelectorAll<HTMLAnchorElement>(".training-detail__downloads a"),
       ).map((link) => link.textContent);
       expect(downloadLabels).toEqual(["results.csv", "best.pt", "last.pt", "args.yaml"]);
+      expect(container.querySelector(".training-detail__downloads")?.textContent).toContain(
+        "폴더 열기",
+      );
+      expect(container.querySelector(".training-detail__downloads")?.textContent).toContain(
+        "경로 복사",
+      );
       expect(
         container.querySelector<HTMLImageElement>("img[src$='/downloads/results.png']"),
       ).not.toBeNull();
@@ -3756,6 +5069,26 @@ describe("TrainingRunPage", () => {
         container.textContent?.indexOf("results.csv") ?? -1,
       );
     });
+    const downloadActions = container.querySelector<HTMLElement>(".training-detail__downloads");
+    await act(async () => {
+      Array.from(downloadActions?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("경로 복사"))
+        ?.click();
+    });
+    expect(clipboardWriteText).toHaveBeenCalledWith(artifactPath);
+    await act(async () => {
+      Array.from(downloadActions?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("폴더 열기"))
+        ?.click();
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/api/local-files/open") &&
+          init?.method === "POST" &&
+          JSON.parse(String(init.body)).path === artifactPath,
+      ),
+    ).toBe(true);
     await waitForAssertion(() => {
       expect(
         fetchMock.mock.calls.some(([url]) => String(url).includes("/logs?tail=200")),

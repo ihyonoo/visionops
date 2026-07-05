@@ -3,6 +3,7 @@ import { Box, CalendarClock, FolderKanban, ImageIcon, Loader2 } from "lucide-rea
 import { useMemo, useState } from "react";
 
 import { apiGet, apiUrl } from "../api/client";
+import { workRunsQueryRefetchInterval } from "../api/realtime";
 import type { JsonObject, Project, TrainingRun } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { useLanguage, type Language } from "../i18n/LanguageProvider";
@@ -12,30 +13,21 @@ type TrainingManagementPageProps = {
   projectId: string;
 };
 
-type TrainingSortKey = "latest" | "name" | "map50" | "precision" | "recall" | "status";
+type TrainingSortKey = "latest" | "oldest" | "name" | "map50" | "precision" | "recall";
 
 const sortOptions: Array<{ key: TrainingSortKey; labelKey: string }> = [
   { key: "latest", labelKey: "trainingManagement.sortLatest" },
+  { key: "oldest", labelKey: "trainingManagement.sortOldest" },
   { key: "map50", labelKey: "trainingManagement.sortMap50" },
   { key: "precision", labelKey: "trainingManagement.sortPrecision" },
   { key: "recall", labelKey: "trainingManagement.sortRecall" },
   { key: "name", labelKey: "trainingManagement.sortName" },
-  { key: "status", labelKey: "trainingManagement.sortStatus" },
 ];
 
 const metricSortKeys: Record<Extract<TrainingSortKey, "map50" | "precision" | "recall">, string[]> = {
   map50: ["best_mAP50", "metrics/mAP50(B)", "mAP50"],
   precision: ["best_precision", "metrics/precision(B)", "precision"],
   recall: ["best_recall", "metrics/recall(B)", "recall"],
-};
-
-const statusPriority: Record<string, number> = {
-  running: 0,
-  queued: 1,
-  completed: 2,
-  failed: 3,
-  canceled: 4,
-  cancelled: 4,
 };
 
 function formatDate(value: string | null | undefined, language: Language): string {
@@ -140,6 +132,7 @@ export function TrainingManagementPage({
   const trainingRunsQuery = useQuery({
     queryFn: () => apiGet<TrainingRun[]>(`/api/projects/${projectId}/training-runs`),
     queryKey: ["projects", projectId, "training-runs"],
+    refetchInterval: workRunsQueryRefetchInterval,
   });
   const trainingRuns = trainingRunsQuery.data ?? [];
   const sortedTrainingRuns = useMemo(() => {
@@ -151,10 +144,8 @@ export function TrainingManagementPage({
         });
         return nameCompare || runFreshness(right) - runFreshness(left);
       }
-      if (sortKey === "status") {
-        const statusCompare =
-          (statusPriority[left.status] ?? 99) - (statusPriority[right.status] ?? 99);
-        return statusCompare || runFreshness(right) - runFreshness(left);
+      if (sortKey === "oldest") {
+        return runFreshness(left) - runFreshness(right);
       }
       if (sortKey === "map50" || sortKey === "precision" || sortKey === "recall") {
         const metricCompare = compareNullableMetric(

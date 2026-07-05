@@ -1,5 +1,7 @@
 from collections.abc import Generator
 from pathlib import Path
+import re
+import unicodedata
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
@@ -35,22 +37,51 @@ def ensure_schema_compatibility() -> None:
         return
 
     inspector = inspect(engine)
-    if not inspector.has_table("dataset_splits"):
+    if not inspector.has_table("projects"):
         return
 
-    columns = {column["name"] for column in inspector.get_columns("dataset_splits")}
     statements: list[str] = []
-    if "test_ratio" not in columns:
-        statements.append("ALTER TABLE dataset_splits ADD COLUMN test_ratio FLOAT NOT NULL DEFAULT 0.0")
-    if "test_count" not in columns:
-        statements.append("ALTER TABLE dataset_splits ADD COLUMN test_count INTEGER NOT NULL DEFAULT 0")
+    project_columns = {column["name"] for column in inspector.get_columns("projects")}
+    should_backfill_project_slugs = "slug" not in project_columns
+    if should_backfill_project_slugs:
+        statements.append("ALTER TABLE projects ADD COLUMN slug VARCHAR NOT NULL DEFAULT ''")
 
-    if not statements:
+    if inspector.has_table("dataset_splits"):
+        split_columns = {column["name"] for column in inspector.get_columns("dataset_splits")}
+        if "test_ratio" not in split_columns:
+            statements.append("ALTER TABLE dataset_splits ADD COLUMN test_ratio FLOAT NOT NULL DEFAULT 0.0")
+        if "test_count" not in split_columns:
+            statements.append("ALTER TABLE dataset_splits ADD COLUMN test_count INTEGER NOT NULL DEFAULT 0")
+
+    if not statements and not should_backfill_project_slugs:
         return
 
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+        if should_backfill_project_slugs:
+            used_slugs: set[str] = set()
+            rows = connection.execute(text("SELECT id, name FROM projects ORDER BY created_at, id")).mappings()
+            for row in rows:
+                base_slug = _project_slug_from_name(str(row["name"]))
+                slug = base_slug
+                suffix = 2
+                while slug in used_slugs:
+                    slug = f"{base_slug}-{suffix}"
+                    suffix += 1
+                used_slugs.add(slug)
+                connection.execute(
+                    text("UPDATE projects SET slug = :slug WHERE id = :project_id"),
+                    {"project_id": row["id"], "slug": slug},
+                )
+
+
+def _project_slug_from_name(name: str) -> str:
+    normalized = unicodedata.normalize("NFKC", name).strip().lower()
+    slug = re.sub(r"[^\w\s-]", "", normalized, flags=re.UNICODE)
+    slug = re.sub(r"[\s_]+", "-", slug, flags=re.UNICODE)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug or "project"
 
 
 def get_db() -> Generator[Session, None, None]:

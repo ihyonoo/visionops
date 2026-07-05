@@ -2,7 +2,6 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import {
   ChevronDown,
   ChevronUp,
-  CheckCircle2,
   Database,
   GitBranch,
   Info,
@@ -18,7 +17,6 @@ import {
   DragEvent,
   FormEvent,
   Fragment,
-  KeyboardEvent,
   useEffect,
   useMemo,
   useRef,
@@ -26,9 +24,17 @@ import {
 } from "react";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiUrl } from "../api/client";
+import {
+  isActiveWorkStatus,
+  isTerminalWorkStatus,
+  shouldRefetchPredictionResults,
+  workRunsQueryRefetchInterval,
+} from "../api/realtime";
 import { LogViewer } from "../components/LogViewer";
+import { LocalPathActions } from "../components/LocalPathActions";
 import { StatusBadge } from "../components/StatusBadge";
 import { useLanguage, type Language, type TranslationFunction } from "../i18n/LanguageProvider";
+import { isManagedVisionOpsPath } from "../utils/localPaths";
 import { TrainingRunPage } from "./TrainingRunPage";
 import type {
   Dataset,
@@ -37,7 +43,6 @@ import type {
   DatasetSplitUpdate,
   InferencePrediction,
   InferenceRun,
-  JsonObject,
   ModelArtifact,
   RuntimeCheck,
   TrainingRun,
@@ -49,6 +54,7 @@ export type DetailTab = "datasets" | "training" | "inference";
 
 type ProjectDetailPageProps = {
   activeTab: DetailTab;
+  focusedInferenceRunId?: string | null;
   onTabChange: (tab: DetailTab) => void;
   projectId: string;
 };
@@ -84,6 +90,7 @@ const defaultTrainingConfig = {
 
 type TrainingConfigState = typeof defaultTrainingConfig;
 type TrainingPresetKey = "balanced" | "fast" | "cpu" | "accuracy";
+type TrainingModelGroup = "YOLO26" | "YOLO12" | "YOLO11" | "YOLOv10" | "YOLOv9" | "YOLOv8";
 type TrainingNumberConfigKey =
   | "epochs"
   | "batch"
@@ -106,6 +113,99 @@ type TrainingNumberConfigKey =
   | "scale"
   | "fliplr";
 type TrainingBooleanConfigKey = "cos_lr" | "cache" | "deterministic" | "amp";
+
+const trainingModelSizeConfig: Record<string, Partial<TrainingConfigState>> = {
+  t: { batch: 16, epochs: 50, imgsz: 640 },
+  n: { batch: 16, epochs: 50, imgsz: 640 },
+  s: { batch: 16, epochs: 60, imgsz: 640 },
+  m: { batch: 8, epochs: 80, imgsz: 640 },
+  b: { batch: 8, epochs: 80, imgsz: 640 },
+  c: { batch: 6, epochs: 100, imgsz: 640 },
+  l: { batch: 6, epochs: 100, imgsz: 640 },
+  e: { batch: 4, epochs: 100, imgsz: 640 },
+  x: { batch: 4, epochs: 100, imgsz: 640 },
+};
+
+function trainingModelOption(value: string, size: string, label: string) {
+  return {
+    value,
+    label: `${value} · ${label}`,
+    config: trainingModelSizeConfig[size],
+  };
+}
+
+const trainingModelGroups: Array<{
+  group: TrainingModelGroup;
+  options: Array<{
+    value: string;
+    label: string;
+    config: Partial<TrainingConfigState>;
+  }>;
+}> = [
+  {
+    group: "YOLO26",
+    options: [
+      trainingModelOption("yolo26n", "n", "nano"),
+      trainingModelOption("yolo26s", "s", "small"),
+      trainingModelOption("yolo26m", "m", "medium"),
+      trainingModelOption("yolo26l", "l", "large"),
+      trainingModelOption("yolo26x", "x", "xlarge"),
+    ],
+  },
+  {
+    group: "YOLO12",
+    options: [
+      trainingModelOption("yolo12n", "n", "nano"),
+      trainingModelOption("yolo12s", "s", "small"),
+      trainingModelOption("yolo12m", "m", "medium"),
+      trainingModelOption("yolo12l", "l", "large"),
+      trainingModelOption("yolo12x", "x", "xlarge"),
+    ],
+  },
+  {
+    group: "YOLO11",
+    options: [
+      trainingModelOption("yolo11n", "n", "nano"),
+      trainingModelOption("yolo11s", "s", "small"),
+      trainingModelOption("yolo11m", "m", "medium"),
+      trainingModelOption("yolo11l", "l", "large"),
+      trainingModelOption("yolo11x", "x", "xlarge"),
+    ],
+  },
+  {
+    group: "YOLOv10",
+    options: [
+      trainingModelOption("yolov10n", "n", "nano"),
+      trainingModelOption("yolov10s", "s", "small"),
+      trainingModelOption("yolov10m", "m", "medium"),
+      trainingModelOption("yolov10b", "b", "balanced"),
+      trainingModelOption("yolov10l", "l", "large"),
+      trainingModelOption("yolov10x", "x", "xlarge"),
+    ],
+  },
+  {
+    group: "YOLOv9",
+    options: [
+      trainingModelOption("yolov9t", "t", "tiny"),
+      trainingModelOption("yolov9s", "s", "small"),
+      trainingModelOption("yolov9m", "m", "medium"),
+      trainingModelOption("yolov9c", "c", "compact"),
+      trainingModelOption("yolov9e", "e", "extended"),
+    ],
+  },
+  {
+    group: "YOLOv8",
+    options: [
+      trainingModelOption("yolov8n", "n", "nano"),
+      trainingModelOption("yolov8s", "s", "small"),
+      trainingModelOption("yolov8m", "m", "medium"),
+      trainingModelOption("yolov8l", "l", "large"),
+      trainingModelOption("yolov8x", "x", "xlarge"),
+    ],
+  },
+];
+
+const trainingModelOptions = trainingModelGroups.flatMap((group) => group.options);
 
 const trainingPresetOptions: Array<{
   key: TrainingPresetKey;
@@ -391,20 +491,8 @@ function shortInternalId(value: string): string {
   return isLongInternalId(value) ? `#${value.slice(0, 8)}` : value;
 }
 
-function isManagedVisionOpsPath(path: string): boolean {
-  const normalizedPath = path.replace(/\\/gu, "/");
-  return /(?:^|\/)vision_ops_data\/projects\/[a-f0-9]{24,}(?:\/|$)/iu.test(normalizedPath);
-}
-
 function artifactOptionLabel(option: ArtifactOption): string {
   return `${option.run.name} / ${option.artifact.kind}`;
-}
-
-function predictionDetections(prediction: InferencePrediction): JsonObject[] {
-  const detections = prediction.prediction_json.detections;
-  return Array.isArray(detections)
-    ? detections.filter((detection): detection is JsonObject => Boolean(detection && typeof detection === "object"))
-    : [];
 }
 
 function predictionImageUrl(
@@ -416,12 +504,6 @@ function predictionImageUrl(
   return apiUrl(
     `/api/projects/${projectId}/inference-runs/${runId}/predictions/${prediction.id}/image?v=${cacheKey}`,
   );
-}
-
-function detectionLabel(detection: JsonObject): string {
-  const className = String(detection.class_name ?? detection.class_id ?? "object");
-  const confidence = typeof detection.confidence === "number" ? detection.confidence.toFixed(2) : null;
-  return confidence ? `${className} ${confidence}` : className;
 }
 
 function formatCount(value: number | null | undefined, language: Language): string {
@@ -556,20 +638,27 @@ function FieldLabel({ label, help }: { label: string; help: string }) {
   );
 }
 
-export function ProjectDetailPage({ activeTab, onTabChange, projectId }: ProjectDetailPageProps) {
+export function ProjectDetailPage({
+  activeTab,
+  focusedInferenceRunId = null,
+  onTabChange,
+  projectId,
+}: ProjectDetailPageProps) {
   const queryClient = useQueryClient();
   const { language, t } = useLanguage();
+  const previousInferenceStatusesRef = useRef<Map<string, string>>(new Map());
   const [datasetDialogOpen, setDatasetDialogOpen] = useState(false);
   const [datasetName, setDatasetName] = useState("");
   const [datasetEditName, setDatasetEditName] = useState("");
   const [editingDataset, setEditingDataset] = useState<Dataset | null>(null);
   const [deletingDataset, setDeletingDataset] = useState<Dataset | null>(null);
   const [datasetMenuId, setDatasetMenuId] = useState<string | null>(null);
+  const [optimisticDatasets, setOptimisticDatasets] = useState<Dataset[]>([]);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [labelFiles, setLabelFiles] = useState<File[]>([]);
   const [dataYamlFiles, setDataYamlFiles] = useState<File[]>([]);
-  const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [expandedSplitDatasetId, setExpandedSplitDatasetId] = useState<string | null>(null);
+  const [splitDialogDatasetId, setSplitDialogDatasetId] = useState<string | null>(null);
   const [splitDialogOpen, setSplitDialogOpen] = useState(false);
   const [splitMenuId, setSplitMenuId] = useState<string | null>(null);
   const [splitEditName, setSplitEditName] = useState("");
@@ -580,14 +669,13 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   const [valRatioInput, setValRatioInput] = useState("");
   const [testRatioInput, setTestRatioInput] = useState("");
   const [seedInput, setSeedInput] = useState("");
-  const [pendingDatasetId, setPendingDatasetId] = useState<string | null>(null);
   const [trainingDrawerOpen, setTrainingDrawerOpen] = useState(false);
   const [advancedTrainingOpen, setAdvancedTrainingOpen] = useState(false);
   const [selectedTrainingRunId, setSelectedTrainingRunId] = useState<string | null>(null);
   const [trainingResultRunId, setTrainingResultRunId] = useState<string | null>(null);
   const [trainingName, setTrainingName] = useState("");
   const [trainingSplitId, setTrainingSplitId] = useState("");
-  const [trainingModelName, setTrainingModelName] = useState("yolo11n");
+  const [trainingModelName, setTrainingModelName] = useState("yolo26n");
   const [trainingPreset, setTrainingPreset] = useState<TrainingPresetKey>("balanced");
   const [trainingConfig, setTrainingConfig] = useState(defaultTrainingConfig);
   const [preflightResult, setPreflightResult] = useState<TrainingPreflight | null>(null);
@@ -595,7 +683,11 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   const [inferenceDialogOpen, setInferenceDialogOpen] = useState(false);
   const [inferenceArtifactId, setInferenceArtifactId] = useState("");
   const [expandedInferenceRunId, setExpandedInferenceRunId] = useState<string | null>(null);
-  const [selectedInferenceRunId, setSelectedInferenceRunId] = useState<string | null>(null);
+  const [inferenceRunMenuId, setInferenceRunMenuId] = useState<string | null>(null);
+  const [selectedPredictionImage, setSelectedPredictionImage] = useState<{
+    label: string;
+    src: string;
+  } | null>(null);
   const [inferenceInputType, setInferenceInputType] = useState<"image" | "folder">("folder");
   const [inferenceFiles, setInferenceFiles] = useState<File[]>([]);
   const [inferenceConfig, setInferenceConfig] = useState(defaultInferenceConfig);
@@ -625,53 +717,6 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   });
   const datasets = datasetsQuery.data ?? [];
 
-  const selectedDatasetFromList = useMemo(
-    () => datasetsQuery.data?.find((dataset) => dataset.id === selectedDatasetId) ?? null,
-    [datasetsQuery.data, selectedDatasetId],
-  );
-
-  const selectedDatasetQuery = useQuery({
-    enabled: Boolean(selectedDatasetId),
-    queryFn: () =>
-      apiGet<Dataset>(`/api/projects/${projectId}/datasets/${selectedDatasetId as string}`),
-    queryKey: ["projects", projectId, "datasets", selectedDatasetId],
-  });
-
-  useEffect(() => {
-    if (!datasetsQuery.data) return;
-    if (pendingDatasetId) {
-      if (selectedDatasetId !== pendingDatasetId) {
-        setPendingDatasetId(null);
-      }
-      return;
-    }
-    if (
-      selectedDatasetId &&
-      (datasetsQuery.data.some((dataset) => dataset.id === selectedDatasetId) ||
-        selectedDatasetQuery.data?.id === selectedDatasetId ||
-        selectedDatasetQuery.isFetching)
-    ) {
-      return;
-    }
-    const firstDataset = datasetsQuery.data?.[0];
-    setSelectedDatasetId(firstDataset?.id ?? null);
-  }, [
-    datasetsQuery.data,
-    pendingDatasetId,
-    selectedDatasetId,
-    selectedDatasetQuery.data,
-    selectedDatasetQuery.isFetching,
-  ]);
-
-  const splitsQuery = useQuery({
-    enabled: Boolean(selectedDatasetId),
-    queryFn: () =>
-      apiGet<DatasetSplit[]>(
-        `/api/projects/${projectId}/datasets/${selectedDatasetId as string}/splits`,
-      ),
-    queryKey: ["projects", projectId, "datasets", selectedDatasetId, "splits"],
-  });
-
   const createDataset = useMutation({
     mutationFn: (body: FormData) =>
       apiPost<Dataset>(`/api/projects/${projectId}/datasets/upload`, body),
@@ -681,8 +726,10 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       setImageFiles([]);
       setLabelFiles([]);
       setDataYamlFiles([]);
-      setPendingDatasetId(dataset.id);
-      setSelectedDatasetId(dataset.id);
+      setOptimisticDatasets((currentDatasets) => [
+        dataset,
+        ...currentDatasets.filter((currentDataset) => currentDataset.id !== dataset.id),
+      ]);
       queryClient.setQueryData<Dataset[]>(
         ["projects", projectId, "datasets"],
         (currentDatasets = []) => [
@@ -702,6 +749,11 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       setEditingDataset(null);
       setDatasetEditName("");
       setDatasetMenuId(null);
+      setOptimisticDatasets((currentDatasets) =>
+        currentDatasets.map((currentDataset) =>
+          currentDataset.id === dataset.id ? dataset : currentDataset,
+        ),
+      );
       queryClient.setQueryData<Dataset[]>(
         ["projects", projectId, "datasets"],
         (currentDatasets = []) =>
@@ -721,6 +773,9 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     onSuccess: (_result, datasetId) => {
       setDeletingDataset(null);
       setDatasetMenuId(null);
+      setOptimisticDatasets((currentDatasets) =>
+        currentDatasets.filter((currentDataset) => currentDataset.id !== datasetId),
+      );
       queryClient.setQueryData<Dataset[]>(
         ["projects", projectId, "datasets"],
         (currentDatasets = []) =>
@@ -730,31 +785,33 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       queryClient.removeQueries({
         queryKey: ["projects", projectId, "datasets", datasetId, "splits"],
       });
-      if (selectedDatasetId === datasetId) {
-        setSelectedDatasetId(null);
-      }
       if (expandedSplitDatasetId === datasetId) {
         setExpandedSplitDatasetId(null);
+      }
+      if (splitDialogDatasetId === datasetId) {
+        setSplitDialogOpen(false);
+        setSplitDialogDatasetId(null);
       }
       queryClient.invalidateQueries({ queryKey: ["projects", projectId, "datasets"] });
     },
   });
 
   const createSplit = useMutation({
-    mutationFn: (body: DatasetSplitCreate) =>
+    mutationFn: ({ body, datasetId }: { body: DatasetSplitCreate; datasetId: string }) =>
       apiPost<DatasetSplit>(
-        `/api/projects/${projectId}/datasets/${selectedDatasetId as string}/splits`,
+        `/api/projects/${projectId}/datasets/${datasetId}/splits`,
         body,
       ),
-    onSuccess: () => {
+    onSuccess: (_split, { datasetId }) => {
       setSplitDialogOpen(false);
+      setSplitDialogDatasetId(null);
       setSplitName("");
       setTrainRatioInput("");
       setValRatioInput("");
       setTestRatioInput("");
       setSeedInput("");
       queryClient.invalidateQueries({
-        queryKey: ["projects", projectId, "datasets", selectedDatasetId, "splits"],
+        queryKey: ["projects", projectId, "datasets", datasetId, "splits"],
       });
     },
   });
@@ -810,11 +867,13 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     },
   });
 
-  const selectedDataset = selectedDatasetQuery.data ?? selectedDatasetFromList;
-  const visibleDatasets =
-    selectedDataset && !datasets.some((dataset) => dataset.id === selectedDataset.id)
-      ? [selectedDataset, ...datasets]
-      : datasets;
+  const visibleDatasets = useMemo(() => {
+    const datasetIds = new Set(datasets.map((dataset) => dataset.id));
+    return [
+      ...optimisticDatasets.filter((dataset) => !datasetIds.has(dataset.id)),
+      ...datasets,
+    ];
+  }, [datasets, optimisticDatasets]);
 
   const trainingSplitQueries = useQueries({
     queries: visibleDatasets.map((dataset) => ({
@@ -844,6 +903,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     enabled: activeTab === "training" || activeTab === "inference",
     queryFn: () => apiGet<TrainingRun[]>(`/api/projects/${projectId}/training-runs`),
     queryKey: ["projects", projectId, "training-runs"],
+    refetchInterval: workRunsQueryRefetchInterval,
   });
   const trainingRuns = trainingRunsQuery.data ?? [];
 
@@ -860,10 +920,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     enabled: activeTab === "inference",
     queryFn: () => apiGet<InferenceRun[]>(`/api/projects/${projectId}/inference-runs`),
     queryKey: ["projects", projectId, "inference-runs"],
-    refetchInterval: (query) => {
-      const runs = query.state.data ?? [];
-      return runs.some((run) => run.status === "queued" || run.status === "running") ? 2000 : false;
-    },
+    refetchInterval: workRunsQueryRefetchInterval,
   });
 
   const runtimeQuery = useQuery({
@@ -879,8 +936,6 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   });
   const selectedInferenceArtifactId = inferenceArtifactId || artifactOptions[0]?.artifact.id || "";
   const inferenceRuns = inferenceRunsQuery.data ?? [];
-  const selectedInferenceRun =
-    inferenceRuns.find((run) => run.id === selectedInferenceRunId) ?? inferenceRuns[0] ?? null;
   const inferencePredictionQueries = useQueries({
     queries: inferenceRuns.map((run) => ({
       enabled: activeTab === "inference",
@@ -889,7 +944,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
           `/api/projects/${projectId}/inference-runs/${run.id}/predictions`,
         ),
       queryKey: ["projects", projectId, "inference-runs", run.id, "predictions"],
-      refetchInterval: run.status === "queued" || run.status === "running" ? 2000 : false,
+      refetchInterval: shouldRefetchPredictionResults(run),
     })),
   });
   const inferencePredictionsByRunId = useMemo(() => {
@@ -914,19 +969,28 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     [prioritizedTrainingRuns, trainingSplitId],
   );
   const selectedTrainingRun =
-    selectedSplitTrainingRuns.find((run) => run.id === selectedTrainingRunId) ??
-    selectedSplitTrainingRuns[0] ??
-    null;
+    trainingSplitId
+      ? selectedSplitTrainingRuns.find((run) => run.id === selectedTrainingRunId) ??
+        selectedSplitTrainingRuns[0] ??
+        null
+      : null;
 
   useEffect(() => {
-    if (trainingSplitId && trainingSplitOptions.some((option) => option.split.id === trainingSplitId)) {
+    if (!trainingSplitId || trainingSplitOptions.some((option) => option.split.id === trainingSplitId)) {
       return;
     }
-    setTrainingSplitId(trainingSplitOptions[0]?.split.id ?? "");
+    setTrainingSplitId("");
+    setSelectedTrainingRunId(null);
   }, [trainingSplitId, trainingSplitOptions]);
 
   useEffect(() => {
     if (!trainingRunsQuery.data) return;
+    if (!trainingSplitId) {
+      if (selectedTrainingRunId) {
+        setSelectedTrainingRunId(null);
+      }
+      return;
+    }
     const nextTrainingRun =
       selectedSplitTrainingRuns.find((run) => run.id === selectedTrainingRunId) ??
       selectedSplitTrainingRuns[0] ??
@@ -935,7 +999,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       return;
     }
     setSelectedTrainingRunId(nextTrainingRun?.id ?? null);
-  }, [selectedSplitTrainingRuns, selectedTrainingRunId, trainingRunsQuery.data]);
+  }, [selectedSplitTrainingRuns, selectedTrainingRunId, trainingRunsQuery.data, trainingSplitId]);
 
   useEffect(() => {
     if (inferenceArtifactId && artifactOptions.some((option) => option.artifact.id === inferenceArtifactId)) {
@@ -945,12 +1009,48 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   }, [artifactOptions, inferenceArtifactId]);
 
   useEffect(() => {
-    if (!inferenceRunsQuery.data) return;
-    const nextRun =
-      inferenceRuns.find((run) => run.id === selectedInferenceRunId) ?? inferenceRuns[0] ?? null;
-    if (nextRun?.id === selectedInferenceRunId) return;
-    setSelectedInferenceRunId(nextRun?.id ?? null);
-  }, [inferenceRuns, inferenceRunsQuery.data, selectedInferenceRunId]);
+    const previousStatuses = previousInferenceStatusesRef.current;
+    const nextStatuses = new Map<string, string>();
+
+    for (const run of inferenceRuns) {
+      const normalizedStatus = run.status.trim().toLowerCase();
+      const previousStatus = previousStatuses.get(run.id);
+      nextStatuses.set(run.id, normalizedStatus);
+
+      if (
+        previousStatus &&
+        isActiveWorkStatus(previousStatus) &&
+        isTerminalWorkStatus(normalizedStatus)
+      ) {
+        queryClient.invalidateQueries({
+          queryKey: ["projects", projectId, "inference-runs", run.id],
+        });
+        queryClient.invalidateQueries({
+          queryKey: ["projects", projectId, "inference-runs", run.id, "predictions"],
+        });
+      }
+    }
+
+    previousInferenceStatusesRef.current = nextStatuses;
+  }, [inferenceRuns, projectId, queryClient]);
+
+  useEffect(() => {
+    if (!focusedInferenceRunId) return;
+    setExpandedInferenceRunId(focusedInferenceRunId);
+  }, [focusedInferenceRunId]);
+
+  useEffect(() => {
+    if (!selectedPredictionImage) return undefined;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSelectedPredictionImage(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedPredictionImage]);
 
   const createTrainingRun = useMutation({
     mutationFn: (body: TrainingRunCreate) =>
@@ -983,12 +1083,12 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       setInferenceFiles([]);
       setInferenceDialogOpen(false);
       setExpandedInferenceRunId(run.id);
-      setSelectedInferenceRunId(run.id);
       queryClient.setQueryData<InferenceRun[]>(
         ["projects", projectId, "inference-runs"],
         (currentRuns = []) => [run, ...currentRuns.filter((currentRun) => currentRun.id !== run.id)],
       );
-      queryClient.invalidateQueries({ queryKey: ["projects", projectId, "inference-runs"] });
+      queryClient.setQueryData(["projects", projectId, "inference-runs", run.id], run);
+      queryClient.setQueryData(["projects", projectId, "inference-runs", run.id, "predictions"], []);
     },
   });
 
@@ -1003,9 +1103,6 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       queryClient.removeQueries({
         queryKey: ["projects", projectId, "inference-runs", run.id, "predictions"],
       });
-      if (selectedInferenceRunId === run.id) {
-        setSelectedInferenceRunId(null);
-      }
       if (expandedInferenceRunId === run.id) {
         setExpandedInferenceRunId(null);
       }
@@ -1093,8 +1190,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
 
   function openSplitDialog(datasetId: string) {
     createSplit.reset();
-    setPendingDatasetId(null);
-    setSelectedDatasetId(datasetId);
+    setSplitDialogDatasetId(datasetId);
     setExpandedSplitDatasetId(datasetId);
     setSplitDialogOpen(true);
   }
@@ -1107,6 +1203,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     setValRatioInput("");
     setTestRatioInput("");
     setSeedInput("");
+    setSplitDialogDatasetId(null);
     createSplit.reset();
   }
 
@@ -1139,14 +1236,17 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   function handleSplitSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedName = splitName.trim();
-    if (!selectedDatasetId || !trimmedName || ratioError || createSplit.isPending) return;
+    if (!splitDialogDatasetId || !trimmedName || ratioError || createSplit.isPending) return;
 
     createSplit.mutate({
-      name: trimmedName,
-      seed,
-      train_ratio: trainRatio,
-      val_ratio: valRatio,
-      test_ratio: testRatio,
+      body: {
+        name: trimmedName,
+        seed,
+        train_ratio: trainRatio,
+        val_ratio: valRatio,
+        test_ratio: testRatio,
+      },
+      datasetId: splitDialogDatasetId,
     });
   }
 
@@ -1189,7 +1289,11 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
 
   function selectTrainingSplit(datasetId: string, splitId: string) {
     clearTrainingCommandPreview();
-    setSelectedDatasetId(datasetId);
+    if (trainingSplitId === splitId) {
+      setTrainingSplitId("");
+      setSelectedTrainingRunId(null);
+      return;
+    }
     setExpandedSplitDatasetId(datasetId);
     setTrainingSplitId(splitId);
   }
@@ -1224,9 +1328,20 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
 
   function inferenceInputSummary(run: InferenceRun): string {
     if (run.input_type === "folder" && isManagedVisionOpsPath(run.input_path)) {
-      return t("inference.uploadedFolder");
+      const uploadedFolderName = run.config.uploaded_folder_name;
+      if (typeof uploadedFolderName === "string" && uploadedFolderName.trim()) {
+        return uploadedFolderName;
+      }
     }
     return fileName(run.input_path);
+  }
+
+  function inferenceFolderImageCount(run: InferenceRun): number {
+    const inputImageCount = run.config.input_image_count;
+    if (typeof inputImageCount === "number" && Number.isFinite(inputImageCount)) {
+      return inputImageCount;
+    }
+    return run.prediction_count;
   }
 
   function handleInferenceSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1306,6 +1421,21 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     }));
   }
 
+  function applyTrainingModel(modelName: string) {
+    const modelOption = trainingModelOptions.find((option) => option.value === modelName);
+    clearTrainingCommandPreview();
+    setTrainingModelName(modelName);
+    if (!modelOption) return;
+    setTrainingConfig((currentConfig) => ({
+      ...currentConfig,
+      ...modelOption.config,
+      close_mosaic: 10,
+      mosaic: 1,
+      mixup: currentConfig.mixup,
+      optimizer: currentConfig.optimizer || "auto",
+    }));
+  }
+
   function updateInferenceNumberConfig(
     key: keyof typeof defaultInferenceConfig,
     value: number,
@@ -1317,22 +1447,8 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     }));
   }
 
-  function handleSelectDataset(datasetId: string) {
-    setPendingDatasetId(null);
-    setSelectedDatasetId(datasetId);
-  }
-
   function toggleDatasetSplits(datasetId: string) {
-    setPendingDatasetId(null);
-    setSelectedDatasetId(datasetId);
     setExpandedSplitDatasetId((currentId) => (currentId === datasetId ? null : datasetId));
-  }
-
-  function handleDatasetRowKeyDown(event: KeyboardEvent<HTMLElement>, datasetId: string) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      handleSelectDataset(datasetId);
-    }
   }
 
   return (
@@ -1360,22 +1476,16 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
 
             <div className="dataset-list">
               {visibleDatasets.map((dataset, index) => {
-                const datasetSplits = trainingSplitQueries[index]?.data ?? [];
-                const isSelectedDataset = selectedDatasetId === dataset.id;
+                const datasetSplitsQuery = trainingSplitQueries[index];
+                const datasetSplits = datasetSplitsQuery?.data ?? [];
                 const isSplitExpanded = expandedSplitDatasetId === dataset.id;
 
                 return (
                   <Fragment key={dataset.id}>
                     <article
                       aria-label={dataset.name}
-                      aria-selected={isSelectedDataset}
                       className="dataset-row"
                       data-expanded={isSplitExpanded ? "true" : undefined}
-                      data-selected={isSelectedDataset ? "true" : undefined}
-                      onClick={() => handleSelectDataset(dataset.id)}
-                      onKeyDown={(event) => handleDatasetRowKeyDown(event, dataset.id)}
-                      role="button"
-                      tabIndex={0}
                     >
                       <span className="dataset-row__thumbnail" aria-hidden="true">
                         {dataset.image_count > 0 ? (
@@ -1441,6 +1551,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                                 <Pencil aria-hidden="true" size={15} />
                                 <span>{t("projects.rename")}</span>
                               </button>
+                              <LocalPathActions path={dataset.source_path} t={t} variant="menu" />
                               <button onClick={() => openDatasetDeleteDialog(dataset)} type="button">
                                 <Trash2 aria-hidden="true" size={15} />
                                 <span>{t("projects.delete")}</span>
@@ -1451,24 +1562,23 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                         <button
                           aria-expanded={isSplitExpanded}
                           aria-label={t("split.toggleSettings", { name: dataset.name })}
-                          className="dataset-row__split-toggle"
+                          className="secondary-button dataset-row__split-toggle"
                           onClick={(event) => {
                             event.stopPropagation();
                             toggleDatasetSplits(dataset.id);
                           }}
                           type="button"
                         >
-                          <GitBranch aria-hidden="true" size={15} />
-                          <span>
-                            {t(isSplitExpanded ? "split.toggleClose" : "split.toggleOpen", {
-                              count: datasetSplits.length,
-                            })}
-                          </span>
                           {isSplitExpanded ? (
                             <ChevronUp aria-hidden="true" size={15} />
                           ) : (
                             <ChevronDown aria-hidden="true" size={15} />
                           )}
+                          <span>
+                            {t(isSplitExpanded ? "split.toggleClose" : "split.toggleOpen", {
+                              count: datasetSplits.length,
+                            })}
+                          </span>
                         </button>
                       </span>
                     </article>
@@ -1480,7 +1590,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                               <h3>{t("split.list")}</h3>
                             </div>
                             <div className="dataset-row-detail__actions">
-                              {splitsQuery.isFetching ? (
+                              {datasetSplitsQuery?.isFetching ? (
                                 <Loader2 aria-hidden="true" className="spin" size={18} />
                               ) : null}
                               <button
@@ -1494,9 +1604,8 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                             </div>
                           </div>
                           <div className="split-list">
-                            {(splitsQuery.data ?? []).map((split) => (
+                            {datasetSplits.map((split) => (
                               <div className="split-row" key={split.id}>
-                                <CheckCircle2 aria-hidden="true" size={18} />
                                 <span>
                                   <strong>{split.name}</strong>
                                   <small>
@@ -1538,6 +1647,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                                         <Pencil aria-hidden="true" size={15} />
                                         <span>{t("projects.rename")}</span>
                                       </button>
+                                      <LocalPathActions path={split.split_path} t={t} variant="menu" />
                                       <button onClick={() => openSplitDeleteDialog(split)} type="button">
                                         <Trash2 aria-hidden="true" size={15} />
                                         <span>{t("projects.delete")}</span>
@@ -1548,9 +1658,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                               </div>
                             ))}
                           </div>
-                          {selectedDatasetId &&
-                          !splitsQuery.isLoading &&
-                          (splitsQuery.data ?? []).length === 0 ? (
+                          {!datasetSplitsQuery?.isLoading && datasetSplits.length === 0 ? (
                             <div className="empty-state empty-state--compact">
                               <GitBranch aria-hidden="true" size={22} />
                               <p>{t("split.empty")}</p>
@@ -1707,7 +1815,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     <span>{t("form.name")}</span>
                     <input
                       autoFocus
-                      disabled={!selectedDatasetId}
+                      disabled={!splitDialogDatasetId}
                       onChange={(event) => setSplitName(event.target.value)}
                       placeholder={t("split.namePlaceholder")}
                       required
@@ -1719,7 +1827,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     <label className="field">
                       <span>Train</span>
                       <input
-                        disabled={!selectedDatasetId}
+                        disabled={!splitDialogDatasetId}
                         max={1}
                         min={0}
                         onChange={(event) => setTrainRatioInput(event.target.value)}
@@ -1732,7 +1840,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     <label className="field">
                       <span>Val</span>
                       <input
-                        disabled={!selectedDatasetId}
+                        disabled={!splitDialogDatasetId}
                         max={1}
                         min={0}
                         onChange={(event) => setValRatioInput(event.target.value)}
@@ -1745,7 +1853,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     <label className="field">
                       <span>Test</span>
                       <input
-                        disabled={!selectedDatasetId}
+                        disabled={!splitDialogDatasetId}
                         max={1}
                         min={0}
                         onChange={(event) => setTestRatioInput(event.target.value)}
@@ -1758,7 +1866,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     <label className="field">
                       <span>Seed</span>
                       <input
-                        disabled={!selectedDatasetId}
+                        disabled={!splitDialogDatasetId}
                         min={0}
                         onChange={(event) => setSeedInput(event.target.value)}
                         placeholder={t("split.seedPlaceholder")}
@@ -1790,7 +1898,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     <button
                       className="primary-button"
                       disabled={
-                        !selectedDatasetId ||
+                        !splitDialogDatasetId ||
                         !splitName.trim() ||
                         Boolean(ratioError) ||
                         createSplit.isPending
@@ -2225,15 +2333,21 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
               <label className="field">
                 <FieldLabel help={t("training.help.modelPreset")} label={t("training.modelPreset")} />
                 <select
+                  aria-label={t("training.modelPreset")}
                   onChange={(event) => {
-                    clearTrainingCommandPreview();
-                    setTrainingModelName(event.target.value);
+                    applyTrainingModel(event.target.value);
                   }}
                   value={trainingModelName}
                 >
-                  <option value="yolo11n">yolo11n</option>
-                  <option value="yolov8n">yolov8n</option>
-                  <option value="yolov8s">yolov8s</option>
+                  {trainingModelGroups.map((group) => (
+                    <optgroup key={group.group} label={group.group}>
+                      {group.options.map((model) => (
+                        <option key={model.value} value={model.value}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
                 </select>
               </label>
 
@@ -2684,16 +2798,8 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                   const isExpanded = expandedInferenceRunId === run.id;
                   const predictionQuery = inferencePredictionQueries[index];
                   return (
-                    <article
-                      className="inference-run-row"
-                      data-selected={selectedInferenceRun?.id === run.id ? "true" : undefined}
-                      key={run.id}
-                    >
-                      <button
-                        className="inference-run-summary"
-                        onClick={() => setSelectedInferenceRunId(run.id)}
-                        type="button"
-                      >
+                    <article className="inference-run-row" key={run.id}>
+                      <div className="inference-run-summary">
                         <div className="inference-run-thumbnail">
                           {thumbnailPrediction ? (
                             <img
@@ -2716,15 +2822,17 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                           <div className="inference-run-meta">
                             <span>{inferenceInputTypeLabel(run)}</span>
                             <span>{inferenceInputSummary(run)}</span>
-                            <span>
-                              {t("inference.predictionCount", {
-                                count: formatCount(run.prediction_count, language),
-                              })}
-                            </span>
+                            {run.input_type === "folder" ? (
+                              <span>
+                                {t("inference.imageCount", {
+                                  count: formatCount(inferenceFolderImageCount(run), language),
+                                })}
+                              </span>
+                            ) : null}
                           </div>
                           <code title={run.id}>{shortInternalId(run.id)}</code>
                         </div>
-                      </button>
+                      </div>
                       <div className="inference-run-actions">
                         <button
                           className="secondary-button"
@@ -2742,26 +2850,44 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                           )}
                           <span>{t(isExpanded ? "inference.collapse" : "inference.details")}</span>
                         </button>
-                        <button
-                          aria-label={t("inference.deleteRun", { name: run.name })}
-                          className="icon-button"
-                          disabled={deleteInferenceRun.isPending}
-                          onClick={() => deleteInferenceRun.mutate(run)}
-                          type="button"
-                        >
-                          <Trash2 aria-hidden="true" size={16} />
-                        </button>
+                        <span className="inference-run-menu">
+                          <button
+                            aria-expanded={inferenceRunMenuId === run.id}
+                            aria-label={t("inference.actions", { name: run.name })}
+                            className="dataset-row__menu-button"
+                            onClick={() =>
+                              setInferenceRunMenuId((currentId) =>
+                                currentId === run.id ? null : run.id,
+                              )
+                            }
+                            type="button"
+                          >
+                            <MoreVertical aria-hidden="true" size={18} />
+                          </button>
+                          {inferenceRunMenuId === run.id ? (
+                            <span className="dataset-row__menu-popover">
+                              <LocalPathActions path={run.output_path} t={t} variant="menu" />
+                              <button
+                                aria-label={t("inference.deleteRun", { name: run.name })}
+                                disabled={deleteInferenceRun.isPending}
+                                onClick={() => {
+                                  setInferenceRunMenuId(null);
+                                  deleteInferenceRun.mutate(run);
+                                }}
+                                type="button"
+                              >
+                                <Trash2 aria-hidden="true" size={15} />
+                                <span>{t("projects.delete")}</span>
+                              </button>
+                            </span>
+                          ) : null}
+                        </span>
                       </div>
                       {isExpanded ? (
                         <div className="inference-run-details">
-                          <div className="panel__header panel__header--compact">
-                            <div>
-                              <h2>{t("inference.results")}</h2>
-                            </div>
-                            {predictionQuery?.isFetching ? (
-                              <Loader2 aria-hidden="true" className="spin" size={18} />
-                            ) : null}
-                          </div>
+                          {predictionQuery?.isFetching ? (
+                            <Loader2 aria-hidden="true" className="spin" size={18} />
+                          ) : null}
 
                           {run.status !== "completed" ? (
                             <div className="empty-state empty-state--compact">
@@ -2771,41 +2897,36 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                           ) : predictions.length > 0 ? (
                             <div className="prediction-grid prediction-grid--embedded">
                               {predictions.map((prediction) => {
-                                const detections = predictionDetections(prediction);
                                 const hasRenderedImage = Boolean(prediction.output_image_path);
+                                const imageLabel = fileName(prediction.image_path);
+                                const imageSrc = predictionImageUrl(projectId, run.id, prediction);
                                 return (
                                   <article className="prediction-card" key={prediction.id}>
                                     {hasRenderedImage ? (
-                                      <img
-                                        alt={t("inference.resultAlt", {
-                                          name: fileName(prediction.image_path),
-                                        })}
-                                        src={predictionImageUrl(projectId, run.id, prediction)}
-                                      />
+                                      <button
+                                        aria-label={`${imageLabel} ${t("training.openReportImage")}`}
+                                        className="prediction-card__image-button"
+                                        onClick={() =>
+                                          setSelectedPredictionImage({
+                                            label: imageLabel,
+                                            src: imageSrc,
+                                          })
+                                        }
+                                        type="button"
+                                      >
+                                        <img
+                                          alt={t("inference.resultAlt", {
+                                            name: imageLabel,
+                                          })}
+                                          src={imageSrc}
+                                        />
+                                      </button>
                                     ) : (
                                       <div className="prediction-card__missing">
                                         <p>{t("inference.noResultImage")}</p>
                                         <small>{t("inference.noResultImageHelp")}</small>
                                       </div>
                                     )}
-                                    <div className="prediction-card__body">
-                                      <strong>{fileName(prediction.image_path)}</strong>
-                                      <span>
-                                        {t("inference.objectCount", {
-                                          count: detections.length,
-                                          confidence: prediction.max_confidence.toFixed(2),
-                                        })}
-                                      </span>
-                                      {detections.length > 0 ? (
-                                        <div className="prediction-tags">
-                                          {detections.slice(0, 6).map((detection, detectionIndex) => (
-                                            <em key={`${prediction.id}-${detectionIndex}`}>
-                                              {detectionLabel(detection)}
-                                            </em>
-                                          ))}
-                                        </div>
-                                      ) : null}
-                                    </div>
                                   </article>
                                 );
                               })}
@@ -2836,6 +2957,35 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
               </div>
             ) : null}
           </div>
+
+          {selectedPredictionImage ? (
+            <div
+              className="modal-backdrop training-image-modal-backdrop"
+              onClick={() => setSelectedPredictionImage(null)}
+              role="presentation"
+            >
+              <div
+                aria-labelledby="inference-prediction-image-title"
+                aria-modal="true"
+                className="training-image-modal"
+                onClick={(event) => event.stopPropagation()}
+                role="dialog"
+              >
+                <div className="training-image-modal__header">
+                  <h2 id="inference-prediction-image-title">{selectedPredictionImage.label}</h2>
+                  <button
+                    aria-label={t("common.close")}
+                    className="icon-button"
+                    onClick={() => setSelectedPredictionImage(null)}
+                    type="button"
+                  >
+                    <X aria-hidden="true" size={18} />
+                  </button>
+                </div>
+                <img alt={selectedPredictionImage.label} src={selectedPredictionImage.src} />
+              </div>
+            </div>
+          ) : null}
 
           {inferenceDialogOpen ? (
             <div className="modal-backdrop" role="presentation">
