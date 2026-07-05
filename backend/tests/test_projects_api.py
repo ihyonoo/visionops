@@ -262,3 +262,48 @@ def test_create_project_storage_failure_does_not_persist_project(monkeypatch):
     listed = non_raising_client.get("/api/projects")
     assert listed.status_code == 200
     assert listed.json() == []
+
+
+def test_create_classification_project(client):
+    response = client.post(
+        "/api/projects",
+        json={
+            "name": "분류 프로젝트",
+            "description": "class folders",
+            "task_type": "classification",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "분류 프로젝트"
+    assert body["task_type"] == "classification"
+
+
+def test_create_project_rejects_unknown_task_type(client):
+    response = client.post(
+        "/api/projects",
+        json={
+            "name": "bad",
+            "description": "",
+            "task_type": "tracking",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_project_task_type(client):
+    created = client.post(
+        "/api/projects",
+        json={"name": "task 변경", "description": "", "task_type": "detection"},
+    )
+    project_id = created.json()["id"]
+
+    response = client.patch(
+        f"/api/projects/{project_id}",
+        json={"task_type": "classification"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["task_type"] == "classification"

@@ -4,16 +4,19 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, constr
 
 NonEmptyString = constr(strip_whitespace=True, min_length=1)
+ProjectTaskType = Literal["detection", "classification"]
 
 
 class ProjectCreate(BaseModel):
     name: NonEmptyString
     description: str = ""
+    task_type: ProjectTaskType = "detection"
 
 
 class ProjectUpdate(BaseModel):
     name: NonEmptyString | None = None
     description: str | None = None
+    task_type: ProjectTaskType | None = None
 
 
 class ProjectRead(BaseModel):

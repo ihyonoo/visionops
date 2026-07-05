@@ -69,7 +69,7 @@ def create_project(payload: ProjectCreate, db: Annotated[Session, Depends(get_db
         name=payload.name,
         slug=unique_project_slug(db, payload.name),
         description=payload.description,
-        task_type="detection",
+        task_type=payload.task_type,
     )
     try:
         StoragePaths(settings.artifact_root).project_dir(project.id)
@@ -112,6 +112,8 @@ def update_project(
         project.slug = unique_project_slug(db, payload.name, exclude_project_id=project.id)
     if payload.description is not None:
         project.description = payload.description
+    if payload.task_type is not None:
+        project.task_type = payload.task_type
     db.add(project)
     db.commit()
     db.refresh(project)
