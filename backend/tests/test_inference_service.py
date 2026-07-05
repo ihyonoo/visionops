@@ -223,6 +223,42 @@ def test_build_yolo_predict_command_matches_ultralytics_cli_shape(tmp_path):
     ]
 
 
+def test_build_yolo_classification_predict_command(tmp_path):
+    from app.services.inference import build_yolo_predict_command
+
+    command = build_yolo_predict_command(
+        task_type="classification",
+        model_path=tmp_path / "best.pt",
+        input_path=tmp_path / "images",
+        output_dir=tmp_path / "runs" / "predict",
+        config={"conf": 0.25, "imgsz": 224},
+    )
+
+    assert command[:3] == ["yolo", "classify", "predict"]
+    assert f"model={tmp_path / 'best.pt'}" in command
+    assert f"source={tmp_path / 'images'}" in command
+
+
+def test_classification_prediction_payload_from_probabilities():
+    from app.services.inference import classification_prediction_payload
+
+    payload = classification_prediction_payload(
+        image_path=Path("/tmp/image.jpg"),
+        names={0: "ng", 1: "ok", 2: "hold"},
+        indices=[1, 0, 2],
+        confidences=[0.9, 0.08, 0.02],
+    )
+
+    assert payload == {
+        "image_path": "/tmp/image.jpg",
+        "ranking": [
+            {"class_id": 1, "class_name": "ok", "confidence": 0.9},
+            {"class_id": 0, "class_name": "ng", "confidence": 0.08},
+            {"class_id": 2, "class_name": "hold", "confidence": 0.02},
+        ],
+    }
+
+
 def test_post_inference_run_creates_queued_run_and_job(client, db, tmp_path):
     project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
     input_dir = tmp_path / "images"
@@ -515,6 +551,87 @@ def test_inference_worker_completes_run_and_writes_predictions_json(
     assert prediction.image_path == str(input_dir / "image1.jpg")
     assert prediction.max_confidence == 0.91
     assert prediction.class_names == ["scratch"]
+
+
+def test_inference_worker_writes_classification_predictions(db, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import app.worker as worker_module
+
+    project, dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+    project.task_type = "classification"
+    dataset.format = "yolo-classification"
+    dataset.class_names = ["ng", "ok", "hold"]
+    input_dir = tmp_path / "images"
+    input_dir.mkdir()
+    image_path = input_dir / "image1.jpg"
+    image_path.write_text("source", encoding="utf-8")
+    run = InferenceRun(
+        id="inference-classification",
+        project_id=project.id,
+        model_artifact_id=artifact.id,
+        name="classification-test",
+        input_type="folder",
+        input_path=str(input_dir),
+        status="queued",
+        config={"imgsz": 224},
+    )
+    job = Job(
+        id="job-inference-classification",
+        type="inference",
+        target_id=run.id,
+        status="running",
+    )
+    db.add_all([run, job])
+    db.commit()
+
+    def fake_classification_inference(*, model_path, input_path, output_dir, config):
+        (output_dir / "logs").mkdir(parents=True, exist_ok=True)
+        stdout_log_path = output_dir / "logs" / "stdout.log"
+        stdout_log_path.write_text("classification inference", encoding="utf-8")
+        return SimpleNamespace(
+            exit_code=0,
+            output_dir=output_dir,
+            stdout_log_path=stdout_log_path,
+            predictions=[
+                {
+                    "image_path": str(image_path),
+                    "ranking": [
+                        {"class_id": 1, "class_name": "ok", "confidence": 0.91},
+                        {"class_id": 0, "class_name": "ng", "confidence": 0.08},
+                    ],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        worker_module,
+        "run_yolo_classification_inference",
+        fake_classification_inference,
+    )
+
+    handle_inference_job(db, job)
+
+    db.refresh(run)
+    db.refresh(job)
+    assert run.status == "completed"
+    assert run.prediction_count == 1
+    assert job.status == "completed"
+    prediction = db.scalar(
+        select(InferencePrediction).where(InferencePrediction.inference_run_id == run.id)
+    )
+    assert prediction is not None
+    assert prediction.image_path == str(image_path)
+    assert prediction.output_image_path == str(image_path)
+    assert prediction.prediction_json == {
+        "ranking": [
+            {"class_id": 1, "class_name": "ok", "confidence": 0.91},
+            {"class_id": 0, "class_name": "ng", "confidence": 0.08},
+        ],
+        "top": {"class_id": 1, "class_name": "ok", "confidence": 0.91},
+    }
+    assert prediction.class_names == ["ok", "ng"]
+    assert prediction.max_confidence == 0.91
 
 
 def test_inference_worker_passes_absolute_project_path_to_yolo(db, tmp_path, monkeypatch):

@@ -22,7 +22,7 @@ from app.models import (
 )
 from app.services.jobs import COMPLETED, FAILED, claim_next_job, fail_job
 from app.services.ids import new_id
-from app.services.inference import run_yolo_inference
+from app.services.inference import run_yolo_classification_inference, run_yolo_inference
 from app.services.metrics import read_results_csv, summarize_metrics
 from app.services.notifications import NotificationEvent, send_work_notification
 from app.services.storage import StoragePaths
@@ -622,6 +622,32 @@ def _write_inference_predictions(
     return len(predictions_payload)
 
 
+def _write_classification_predictions(
+    db: Session,
+    *,
+    run: InferenceRun,
+    predictions: list[dict],
+) -> int:
+    db.execute(delete(InferencePrediction).where(InferencePrediction.inference_run_id == run.id))
+
+    for item in predictions:
+        ranking = item.get("ranking") or []
+        top = ranking[0] if ranking else None
+        db.add(
+            InferencePrediction(
+                id=new_id("pred"),
+                inference_run_id=run.id,
+                image_path=item["image_path"],
+                output_image_path=item["image_path"],
+                prediction_json={"ranking": ranking, "top": top},
+                class_names=[entry["class_name"] for entry in ranking],
+                max_confidence=float(top["confidence"]) if top else 0.0,
+            )
+        )
+
+    return len(predictions)
+
+
 def handle_inference_job(db: Session, job: Job) -> None:
     run = db.get(InferenceRun, job.target_id)
     if run is None:
@@ -638,6 +664,8 @@ def handle_inference_job(db: Session, job: Job) -> None:
         notify_inference_finished(db, run, "inference_failed")
         return
 
+    project = db.get(Project, run.project_id)
+    task_type = project.task_type if project is not None else "detection"
     now = datetime.now(timezone.utc)
     output_dir = StoragePaths(settings.artifact_root).inference_run_dir(run.project_id, run.id)
     stdout_log_path = output_dir / "logs" / "stdout.log"
@@ -648,12 +676,21 @@ def handle_inference_job(db: Session, job: Job) -> None:
 
     try:
         _ensure_valid_inference_inputs(run, artifact)
-        result = run_yolo_inference(
-            model_path=Path(artifact.path),
-            input_path=Path(run.input_path),
-            output_dir=output_dir,
-            config=_inference_config(run),
-        )
+        if task_type == "classification":
+            result = run_yolo_classification_inference(
+                model_path=Path(artifact.path),
+                input_path=Path(run.input_path),
+                output_dir=output_dir,
+                config=_inference_config(run),
+            )
+        else:
+            result = run_yolo_inference(
+                task_type=task_type,
+                model_path=Path(artifact.path),
+                input_path=Path(run.input_path),
+                output_dir=output_dir,
+                config=_inference_config(run),
+            )
     except Exception as exc:
         run.status = "failed"
         run.finished_at = datetime.now(timezone.utc)
@@ -680,12 +717,19 @@ def handle_inference_job(db: Session, job: Job) -> None:
         return
 
     try:
-        prediction_count = _write_inference_predictions(
-            db,
-            run=run,
-            output_dir=result.output_dir,
-            class_names=_class_names_for_artifact(db, artifact),
-        )
+        if task_type == "classification":
+            prediction_count = _write_classification_predictions(
+                db,
+                run=run,
+                predictions=result.predictions,
+            )
+        else:
+            prediction_count = _write_inference_predictions(
+                db,
+                run=run,
+                output_dir=result.output_dir,
+                class_names=_class_names_for_artifact(db, artifact),
+            )
         run.prediction_count = prediction_count
         run.status = "completed"
         run.finished_at = datetime.now(timezone.utc)
