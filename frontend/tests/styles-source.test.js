@@ -17,4 +17,13 @@ describe("styles source", () => {
     expect(styles).toMatch(/\.log-viewer__body\s*\{[\s\S]*?overflow-wrap:\s*anywhere/u);
     expect(styles).toMatch(/\.log-viewer__body\s*\{[\s\S]*?word-break:\s*break-word/u);
   });
+
+  it("keeps notification settings page styles available", () => {
+    const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+
+    expect(styles).toContain(".settings-page");
+    expect(styles).toContain(".notification-settings-grid");
+    expect(styles).toContain(".notification-card");
+    expect(styles).toContain(".notification-settings-card");
+  });
 });

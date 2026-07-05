@@ -10,6 +10,7 @@ import { LanguageProvider, useLanguage } from "./i18n/LanguageProvider";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
 import type { Project, ProjectCreate } from "./api/types";
 import type { DetailTab } from "./pages/ProjectDetailPage";
+import { NotificationSettingsPage } from "./pages/NotificationSettingsPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { TrainingManagementPage } from "./pages/TrainingManagementPage";
 import { TrainingRunPage } from "./pages/TrainingRunPage";
@@ -28,11 +29,15 @@ const queryClient = new QueryClient({
 });
 
 type AppHistoryState =
-  | { projectId: null; section: "projects" | DetailTab | "training-management"; trainingRunId?: null }
+  | {
+      projectId: null;
+      section: "projects" | DetailTab | "training-management" | "settings-notifications";
+      trainingRunId?: null;
+    }
   | { projectId: string; section: DetailTab | "training-management"; trainingRunId?: string | null };
 
 type AppSection = AppHistoryState["section"];
-type ProjectScopedSection = Exclude<AppSection, "projects">;
+type ProjectScopedSection = Exclude<AppSection, "projects" | "settings-notifications">;
 
 const projectSortStorageKey = "visionops-project-sort";
 const hiddenProjectsStorageKey = "visionops-hidden-projects";
@@ -78,6 +83,7 @@ function appPath(
   trainingRunId: string | null = null,
 ): string {
   if (section === "projects") return "/";
+  if (section === "settings-notifications") return "/settings/notifications";
   if (projectId && section === "training-management" && trainingRunId) {
     return `/projects/${encodeURIComponent(projectId)}/${projectScopedPaths[section]}/${encodeURIComponent(
       trainingRunId,
@@ -89,6 +95,9 @@ function appPath(
 }
 
 function stateFromLocation(): AppHistoryState {
+  if (window.location.pathname === "/settings/notifications") {
+    return { projectId: null, section: "settings-notifications" };
+  }
   const match = window.location.pathname.match(/^\/projects\/([^/]+)(?:\/([^/]+)(?:\/([^/]+))?)?$/);
   if (match) {
     const section = sectionsByPath[match[2] ?? "datasets"] ?? "datasets";
@@ -113,8 +122,13 @@ function stateFromLocation(): AppHistoryState {
 
 function sectionTitleKey(section: AppSection): string {
   if (section === "projects") return "nav.projects";
+  if (section === "settings-notifications") return "notificationSettings.nav";
   if (section === "training-management") return "trainingManagement.nav";
   return `detail.${section}`;
+}
+
+function isProjectScopedSection(section: AppSection): section is ProjectScopedSection {
+  return section !== "projects" && section !== "settings-notifications";
 }
 
 function ProjectRequiredEmpty({
@@ -208,7 +222,9 @@ function AppContent() {
   const createSidebarProject = useMutation({
     mutationFn: (body: ProjectCreate) => apiPost<Project>("/api/projects", body),
     onSuccess: (project) => {
-      const nextSection: ProjectScopedSection = activeSection === "projects" ? "datasets" : activeSection;
+      const nextSection: ProjectScopedSection = isProjectScopedSection(activeSection)
+        ? activeSection
+        : "datasets";
       const nextState: AppHistoryState = {
         projectId: project.id,
         section: nextSection,
@@ -244,7 +260,9 @@ function AppContent() {
   }
 
   function handleSelectProjectInSidebar(projectId: string) {
-    const nextSection: ProjectScopedSection = activeSection === "projects" ? "datasets" : activeSection;
+    const nextSection: ProjectScopedSection = isProjectScopedSection(activeSection)
+      ? activeSection
+      : "datasets";
     const nextState: AppHistoryState = {
       projectId,
       section: nextSection,
@@ -261,6 +279,8 @@ function AppContent() {
     const nextState: AppHistoryState =
       section === "projects"
         ? { projectId: null, section: "projects" }
+        : section === "settings-notifications"
+          ? { projectId: null, section: "settings-notifications" }
         : selectedProjectId
           ? { projectId: selectedProjectId, section }
           : { projectId: null, section };
@@ -286,6 +306,14 @@ function AppContent() {
 
   function handleOpenProjects() {
     handleSectionChange("projects");
+  }
+
+  function openNotificationSettings() {
+    const nextState = { projectId: null, section: "settings-notifications" } satisfies AppHistoryState;
+    window.history.pushState(nextState, "", appPath(null, "settings-notifications"));
+    setSelectedProjectId(null);
+    setActiveSection("settings-notifications");
+    setFocusedTrainingRunId(null);
   }
 
   function handleOpenTrainingRun(projectId: string, runId: string) {
@@ -339,6 +367,8 @@ function AppContent() {
   const title =
     activeSection === "projects"
       ? t("nav.projects")
+      : activeSection === "settings-notifications"
+        ? t("notificationSettings.nav")
       : activeSection === "training-management"
         ? t("trainingManagement.nav")
       : selectedProjectQuery.data?.name ?? t(sectionTitleKey(activeSection));
@@ -348,6 +378,7 @@ function AppContent() {
       activeSection={activeSection}
       hiddenProjectIds={hiddenProjectIds}
       onCreateProject={openSidebarCreateDialog}
+      onOpenNotificationSettings={openNotificationSettings}
       onNavigate={handleSectionChange}
       onProjectSortChange={setProjectSort}
       onSelectProject={handleSelectProjectInSidebar}
@@ -364,6 +395,8 @@ function AppContent() {
           onSelectProject={handleSelectProject}
           selectedProjectId={selectedProjectId}
         />
+      ) : activeSection === "settings-notifications" ? (
+        <NotificationSettingsPage />
       ) : !selectedProjectId ? (
         <ProjectRequiredEmpty onOpenProjects={handleOpenProjects} section={activeSection} />
       ) : activeSection === "training-management" && focusedTrainingRunId ? (

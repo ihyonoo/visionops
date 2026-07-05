@@ -23,7 +23,8 @@ export type GlobalSection =
   | "datasets"
   | "training"
   | "training-management"
-  | "inference";
+  | "inference"
+  | "settings-notifications";
 
 export type ProjectSort = "updated_desc" | "name_asc";
 
@@ -32,6 +33,7 @@ type LayoutProps = {
   children: ReactNode;
   hiddenProjectIds?: string[];
   onCreateProject?: () => void;
+  onOpenNotificationSettings?: () => void;
   onProjectSortChange?: (sort: ProjectSort) => void;
   onSelectProject?: (projectId: string) => void;
   onToggleProjectHidden?: (projectId: string) => void;
@@ -276,6 +278,7 @@ export function Layout({
   children,
   hiddenProjectIds = [],
   onCreateProject = () => undefined,
+  onOpenNotificationSettings = () => undefined,
   onProjectSortChange = () => undefined,
   onSelectProject = () => undefined,
   onToggleProjectHidden = () => undefined,
@@ -292,7 +295,8 @@ export function Layout({
   const [projectSidebarCollapsed, setProjectSidebarCollapsed] = useState(storedSidebarCollapsed);
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
   const { t } = useLanguage();
-  const showProjectSidebar = activeSection !== "projects";
+  const showProjectSidebar =
+    activeSection !== "projects" && activeSection !== "settings-notifications";
 
   useEffect(() => {
     window.localStorage?.setItem?.(SIDEBAR_WIDTH_KEY, String(projectSidebarWidth));
@@ -401,12 +405,15 @@ export function Layout({
             </button>
             <button
               className="icon-button"
-              aria-label={t("header.notifications")}
+              aria-label={t("notificationSettings.nav")}
+              aria-current={activeSection === "settings-notifications" ? "page" : undefined}
+              data-active={activeSection === "settings-notifications" ? "true" : undefined}
               onClick={() => {
                 setSettingsOpen(false);
-                setHeaderNotice(t("header.noNotifications"));
+                setHeaderNotice(null);
+                onOpenNotificationSettings();
               }}
-              title={t("header.notifications")}
+              title={t("notificationSettings.nav")}
               type="button"
             >
               <Bell aria-hidden="true" size={18} />

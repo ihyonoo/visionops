@@ -636,10 +636,12 @@ describe("Layout", () => {
     container.remove();
   });
 
-  it("shows feedback when header icon buttons are clicked", () => {
+  it("opens notification settings from the header action", () => {
+    const onOpenNotificationSettings = vi.fn();
     const { container, root } = render(
       <Layout
         activeSection="projects"
+        onOpenNotificationSettings={onOpenNotificationSettings}
         onNavigate={vi.fn()}
         title="프로젝트"
       >
@@ -648,10 +650,10 @@ describe("Layout", () => {
     );
 
     act(() => {
-      container.querySelector<HTMLButtonElement>("[aria-label='알림']")?.click();
+      container.querySelector<HTMLButtonElement>("[aria-label='알림 설정']")?.click();
     });
 
-    expect(container.textContent).toContain("알림이 없습니다.");
+    expect(onOpenNotificationSettings).toHaveBeenCalledOnce();
 
     act(() => root.unmount());
     container.remove();
@@ -889,6 +891,47 @@ describe("App navigation", () => {
           (button) => button.textContent?.includes("데이터셋"),
         )?.getAttribute("aria-current"),
       ).toBe("page");
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("routes notification settings as a global settings page", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/projects")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/notification-settings")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(null, "", "/settings/notifications");
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(<App />);
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/settings/notifications");
+      expect(container.textContent).toContain("알림 설정");
+      expect(container.textContent).not.toContain("프로젝트가 선택되지 않았습니다");
+      expect(container.querySelector(".project-sidebar")).toBeNull();
+      expect(container.querySelector("[aria-label='알림 설정']")?.getAttribute("aria-current")).toBe(
+        "page",
+      );
     });
 
     act(() => root.unmount());
