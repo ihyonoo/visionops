@@ -164,7 +164,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
   }
 
   return (
-    <article className="panel notification-settings-card">
+    <article className="notification-card">
       <form onSubmit={handleSubmit}>
         <div className="panel__header">
           <div>
@@ -308,46 +308,42 @@ export function NotificationSettingsPage() {
   const hasSettings = settingsQuery.data !== undefined;
 
   return (
-    <div className="page-stack">
-      <section className="content-grid">
-        <div className="panel panel--wide">
-          <div className="panel__header">
-            <div>
-              <h2>{t("notificationSettings.title")}</h2>
-              <p>{t("notificationSettings.description")}</p>
-            </div>
-            {settingsQuery.isFetching ? <Loader2 aria-hidden="true" className="spin" size={18} /> : null}
-          </div>
-
-          {settingsQuery.isLoading && !hasSettings ? (
-            <div className="empty-state">
-              <Loader2 aria-hidden="true" className="spin" size={22} />
-              <p>{t("notificationSettings.loading")}</p>
-            </div>
-          ) : null}
-
-          {settingsQuery.isError && !hasSettings ? (
-            <div className="notice notice--danger" role="alert">
-              {t("notificationSettings.loadError")}
-            </div>
-          ) : null}
-
-          {hasSettings ? (
-            <div className="project-card-grid">
-              {settings.map((setting) => {
-                const channel = channels.find((item) => item.channel === setting.channel);
-                return (
-                  <NotificationChannelCard
-                    key={setting.channel}
-                    setting={setting}
-                    title={channel?.title ?? setting.channel}
-                  />
-                );
-              })}
-            </div>
-          ) : null}
+    <div className="settings-page">
+      <section aria-labelledby="notification-settings-title" className="settings-page__header">
+        <div>
+          <h2 id="notification-settings-title">{t("notificationSettings.title")}</h2>
+          <p>{t("notificationSettings.description")}</p>
         </div>
+        {settingsQuery.isFetching ? <Loader2 aria-hidden="true" className="spin" size={18} /> : null}
       </section>
+
+      {settingsQuery.isLoading && !hasSettings ? (
+        <div className="empty-state">
+          <Loader2 aria-hidden="true" className="spin" size={22} />
+          <p>{t("notificationSettings.loading")}</p>
+        </div>
+      ) : null}
+
+      {settingsQuery.isError && !hasSettings ? (
+        <div className="notice notice--danger" role="alert">
+          {t("notificationSettings.loadError")}
+        </div>
+      ) : null}
+
+      {hasSettings ? (
+        <section aria-label={t("notificationSettings.nav")} className="notification-settings-grid">
+          {settings.map((setting) => {
+            const channel = channels.find((item) => item.channel === setting.channel);
+            return (
+              <NotificationChannelCard
+                key={setting.channel}
+                setting={setting}
+                title={channel?.title ?? setting.channel}
+              />
+            );
+          })}
+        </section>
+      ) : null}
     </div>
   );
 }

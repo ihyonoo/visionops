@@ -167,6 +167,10 @@ describe("NotificationSettingsPage", () => {
       expect(container.textContent).toContain("Telegram");
     });
     expect(container.textContent).not.toContain("notificationSettings.");
+    expect(container.querySelector(".settings-page")).not.toBeNull();
+    expect(container.querySelector(".notification-settings-grid")).not.toBeNull();
+    expect(container.querySelectorAll(".notification-card")).toHaveLength(3);
+    expect(container.querySelector(".settings-page > .panel")).toBeNull();
 
     const slackEnabled = container.querySelector<HTMLInputElement>(
       'input[aria-label="Slack 활성화"]',
