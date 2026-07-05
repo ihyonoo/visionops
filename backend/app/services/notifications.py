@@ -264,6 +264,7 @@ def _attempt_delivery(
     event: NotificationEvent,
 ) -> NotificationResult:
     try:
+        _validate_channel_config(channel, config)
         _send_channel(channel, config, event.text)
     except Exception as exc:
         if setting is not None:
@@ -300,7 +301,6 @@ def send_test_notification(
     config: dict,
     setting: NotificationChannel | None = None,
 ) -> NotificationResult:
-    _validate_channel_config(channel, config)
     event = NotificationEvent(
         event_type="test",
         target_type="notification_settings",

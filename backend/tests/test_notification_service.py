@@ -12,6 +12,7 @@ from app.services.notifications import (
     masked_channel_secret,
     mask_secret,
     redact_secret,
+    send_test_notification,
     send_work_notification,
     validate_channel_payload,
 )
@@ -191,6 +192,92 @@ def test_send_work_notification_records_failure(db, monkeypatch):
     assert delivery.status == "failed"
     assert delivery.error_message is not None
     assert "SECRET" not in delivery.error_message
+
+
+def test_send_work_notification_rejects_invalid_stored_webhook_without_posting(
+    db, monkeypatch
+):
+    raw_url = "http://127.0.0.1:9/internal"
+    channel = NotificationChannel(
+        id="ntf_slack",
+        channel="slack",
+        enabled=1,
+        events={
+            "training_completed": True,
+            "training_failed": True,
+            "inference_completed": True,
+            "inference_failed": True,
+        },
+        config={"webhook_url": raw_url},
+    )
+    db.add(channel)
+    db.commit()
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("invalid stored webhook should not be sent")
+
+    monkeypatch.setattr("app.services.notifications.httpx.post", fail_post)
+
+    results = send_work_notification(
+        db,
+        NotificationEvent(
+            event_type="training_completed",
+            target_type="training_run",
+            target_id="run-invalid",
+            text="Training completed",
+        ),
+    )
+
+    db.refresh(channel)
+    delivery = db.scalar(select(NotificationDelivery))
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert channel.last_status == "failed"
+    assert channel.last_error is not None
+    assert raw_url not in channel.last_error
+    assert "Slack webhook URL" in channel.last_error
+    assert delivery is not None
+    assert delivery.status == "failed"
+    assert delivery.error_message is not None
+    assert raw_url not in delivery.error_message
+
+
+def test_send_test_notification_rejects_invalid_stored_webhook_without_posting(
+    db, monkeypatch
+):
+    raw_url = "http://127.0.0.1:9/internal"
+    channel = NotificationChannel(
+        id="ntf_slack",
+        channel="slack",
+        enabled=1,
+        events={
+            "training_completed": True,
+            "training_failed": True,
+            "inference_completed": True,
+            "inference_failed": True,
+        },
+        config={"webhook_url": raw_url},
+    )
+    db.add(channel)
+    db.commit()
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("invalid stored webhook should not be sent")
+
+    monkeypatch.setattr("app.services.notifications.httpx.post", fail_post)
+
+    result = send_test_notification(db, "slack", channel.config, channel)
+
+    db.refresh(channel)
+    delivery = db.scalar(select(NotificationDelivery))
+    assert result.status == "failed"
+    assert channel.last_status == "failed"
+    assert channel.last_error is not None
+    assert raw_url not in channel.last_error
+    assert delivery is not None
+    assert delivery.status == "failed"
+    assert delivery.error_message is not None
+    assert raw_url not in delivery.error_message
 
 
 def test_send_work_notification_posts_slack_payload(db, monkeypatch):
