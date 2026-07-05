@@ -98,17 +98,30 @@ def _display_path(path: Path) -> str:
     return path.as_posix()
 
 
+def _is_classification_split_layout(dataset_root: Path) -> bool:
+    return any((dataset_root / subset).is_dir() for subset in CLASSIFICATION_SUBSETS)
+
+
+def _classification_image_files(root: Path) -> list[Path]:
+    if not root.is_dir():
+        return []
+    return sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
 def _classification_class_roots(dataset_root: Path) -> dict[str, Path]:
-    if any((dataset_root / subset).is_dir() for subset in CLASSIFICATION_SUBSETS):
-        class_names: set[str] = set()
-        for subset in CLASSIFICATION_SUBSETS:
-            subset_root = dataset_root / subset
-            if not subset_root.is_dir():
-                continue
-            for child in subset_root.iterdir():
-                if child.is_dir():
-                    class_names.add(child.name)
-        return {class_name: dataset_root for class_name in sorted(class_names)}
+    if _is_classification_split_layout(dataset_root):
+        train_root = dataset_root / "train"
+        if not train_root.is_dir():
+            return {}
+        return {
+            child.name: child
+            for child in sorted(train_root.iterdir())
+            if child.is_dir()
+        }
 
     return {
         child.name: child
@@ -124,12 +137,7 @@ def _classification_images_for_class(dataset_root: Path, class_name: str) -> lis
         roots = existing_subset_roots
     else:
         roots = [dataset_root / class_name]
-    return sorted(
-        path
-        for root in roots
-        for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-    )
+    return sorted(path for root in roots for path in _classification_image_files(root))
 
 
 def validate_classification_dataset(dataset_root: Path) -> ValidationResult:
@@ -139,14 +147,31 @@ def validate_classification_dataset(dataset_root: Path) -> ValidationResult:
     if not dataset_root.exists():
         return ValidationResult(status="invalid", errors=[f"Dataset path does not exist: {dataset_root}"])
 
+    is_split_layout = _is_classification_split_layout(dataset_root)
     class_roots = _classification_class_roots(dataset_root)
     class_names = sorted(class_roots)
+    if is_split_layout and not (dataset_root / "train").is_dir():
+        errors.append("Classification split layout requires train directory.")
     if len(class_names) < 2:
         errors.append("Classification 데이터셋은 최소 2개 class directory가 필요합니다.")
+
+    if is_split_layout:
+        known_classes = set(class_names)
+        for subset in ("val", "test"):
+            subset_root = dataset_root / subset
+            if not subset_root.is_dir():
+                continue
+            for child in sorted(subset_root.iterdir()):
+                if child.is_dir() and child.name not in known_classes:
+                    errors.append(f"Unknown class directory in {subset}: {child.name}")
 
     class_distribution: dict[str, int] = {}
     image_count = 0
     for class_name in class_names:
+        if is_split_layout:
+            train_images = _classification_image_files(dataset_root / "train" / class_name)
+            if not train_images:
+                errors.append(f"train class directory에 이미지가 없습니다: {class_name}")
         images = _classification_images_for_class(dataset_root, class_name)
         class_distribution[class_name] = len(images)
         image_count += len(images)

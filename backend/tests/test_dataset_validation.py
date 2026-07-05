@@ -174,3 +174,33 @@ def test_classification_dataset_reports_corrupt_images(tmp_path):
 
     assert result.status == "invalid"
     assert any("Corrupt image" in error for error in result.errors)
+
+
+def test_classification_split_layout_requires_train_directory(tmp_path):
+    from app.services.dataset_validation import validate_classification_dataset
+
+    for class_name in ("ok", "ng"):
+        class_dir = tmp_path / "cls" / "val" / class_name
+        class_dir.mkdir(parents=True)
+        Image.new("RGB", (16, 16), color="white").save(class_dir / f"{class_name}.jpg")
+
+    result = validate_classification_dataset(tmp_path / "cls")
+
+    assert result.status == "invalid"
+    assert any("train" in error for error in result.errors)
+
+
+def test_classification_split_layout_uses_train_classes(tmp_path):
+    from app.services.dataset_validation import validate_classification_dataset
+
+    train_ok_dir = tmp_path / "cls" / "train" / "ok"
+    val_ng_dir = tmp_path / "cls" / "val" / "ng"
+    train_ok_dir.mkdir(parents=True)
+    val_ng_dir.mkdir(parents=True)
+    Image.new("RGB", (16, 16), color="white").save(train_ok_dir / "ok.jpg")
+    Image.new("RGB", (16, 16), color="white").save(val_ng_dir / "ng.jpg")
+
+    result = validate_classification_dataset(tmp_path / "cls")
+
+    assert result.status == "invalid"
+    assert any("최소 2개" in error or "unknown" in error for error in result.errors)
