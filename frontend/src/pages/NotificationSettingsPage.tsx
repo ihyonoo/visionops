@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Loader2, Send, Trash2 } from "lucide-react";
+import { Loader2, Save, Send, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 
 import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
@@ -77,6 +77,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
   const [botToken, setBotToken] = useState("");
   const [chatId, setChatId] = useState("");
   const [isDirty, setIsDirty] = useState(false);
+  const [saveBeforeTestVisible, setSaveBeforeTestVisible] = useState(false);
 
   useEffect(() => {
     if (isDirty) return;
@@ -102,6 +103,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
       );
       resetSecretDrafts();
       setIsDirty(false);
+      setSaveBeforeTestVisible(false);
       queryClient.invalidateQueries({ queryKey: ["notification-settings"] });
     },
   });
@@ -124,6 +126,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
       setEvents({ ...defaultEvents });
       resetSecretDrafts();
       setIsDirty(false);
+      setSaveBeforeTestVisible(false);
       queryClient.invalidateQueries({ queryKey: ["notification-settings"] });
     },
   });
@@ -132,6 +135,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
 
   function setEventEnabled(key: keyof NotificationEvents, checked: boolean) {
     setIsDirty(true);
+    setSaveBeforeTestVisible(false);
     setEvents((currentEvents) => ({
       ...currentEvents,
       [key]: checked,
@@ -163,6 +167,16 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
     saveSetting.mutate(buildUpdate());
   }
 
+  function handleTest() {
+    if (testSetting.isPending) return;
+    if (isDirty || !setting.has_secret) {
+      setSaveBeforeTestVisible(true);
+      return;
+    }
+    setSaveBeforeTestVisible(false);
+    testSetting.mutate();
+  }
+
   return (
     <article className="notification-card">
       <form onSubmit={handleSubmit}>
@@ -181,6 +195,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
               checked={enabled}
               onChange={(event) => {
                 setIsDirty(true);
+                setSaveBeforeTestVisible(false);
                 setEnabled(event.target.checked);
               }}
               type="checkbox"
@@ -197,6 +212,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
                   autoComplete="off"
                   onChange={(event) => {
                     setIsDirty(true);
+                    setSaveBeforeTestVisible(false);
                     setBotToken(event.target.value);
                   }}
                   placeholder={setting.has_secret ? t("notificationSettings.storedToken") : ""}
@@ -210,6 +226,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
                   aria-label="Telegram Chat ID"
                   onChange={(event) => {
                     setIsDirty(true);
+                    setSaveBeforeTestVisible(false);
                     setChatId(event.target.value);
                   }}
                   type="text"
@@ -225,6 +242,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
                 autoComplete="off"
                 onChange={(event) => {
                   setIsDirty(true);
+                  setSaveBeforeTestVisible(false);
                   setWebhookUrl(event.target.value);
                 }}
                 placeholder={setting.has_secret ? t("notificationSettings.storedWebhook") : ""}
@@ -260,6 +278,11 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
             {t("notificationSettings.saveError")}
           </div>
         ) : null}
+        {saveBeforeTestVisible ? (
+          <div className="notice notice--warning" role="alert">
+            {t("notificationSettings.saveBeforeTest")}
+          </div>
+        ) : null}
         {testSetting.isError ? (
           <div className="notice notice--danger" role="alert">
             {t("notificationSettings.testError")}
@@ -273,16 +296,8 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
 
         <div className="button-row">
           <button className="primary-button" disabled={saveSetting.isPending} type="submit">
-            <Bell aria-hidden="true" size={16} />
+            <Save aria-hidden="true" size={16} />
             <span>{t("notificationSettings.saveChannel", { channel: title })}</span>
-          </button>
-          <button
-            disabled={testSetting.isPending}
-            onClick={() => testSetting.mutate()}
-            type="button"
-          >
-            <Send aria-hidden="true" size={16} />
-            <span>{t("notificationSettings.testChannel", { channel: title })}</span>
           </button>
           <button
             disabled={deleteSetting.isPending}
@@ -291,6 +306,14 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
           >
             <Trash2 aria-hidden="true" size={16} />
             <span>{t("notificationSettings.deleteChannel", { channel: title })}</span>
+          </button>
+          <button
+            disabled={testSetting.isPending}
+            onClick={handleTest}
+            type="button"
+          >
+            <Send aria-hidden="true" size={16} />
+            <span>{t("notificationSettings.testChannel", { channel: title })}</span>
           </button>
         </div>
       </form>

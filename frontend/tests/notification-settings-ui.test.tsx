@@ -178,11 +178,15 @@ describe("NotificationSettingsPage", () => {
     const slackWebhook = container.querySelector<HTMLInputElement>(
       'input[aria-label="Slack Webhook URL"]',
     );
-    const slackSave = findButton(container, "Slack 저장");
+    const slackSave = findButton(container, "저장");
 
     expect(slackEnabled).not.toBeNull();
     expect(slackWebhook).not.toBeNull();
     expect(slackSave).not.toBeUndefined();
+    const slackActions = Array.from(
+      container.querySelector(".notification-card .button-row")?.querySelectorAll("button") ?? [],
+    ).map((button) => button.textContent);
+    expect(slackActions).toEqual(["저장", "삭제", "테스트"]);
 
     await act(async () => {
       slackEnabled?.click();
@@ -234,7 +238,7 @@ describe("NotificationSettingsPage", () => {
     const slackWebhook = container.querySelector<HTMLInputElement>(
       'input[aria-label="Slack Webhook URL"]',
     );
-    const slackSave = findButton(container, "Slack 저장");
+    const slackSave = findButton(container, "저장");
 
     expect(slackWebhook).not.toBeNull();
     expect(slackSave).not.toBeUndefined();
@@ -249,6 +253,34 @@ describe("NotificationSettingsPage", () => {
     await waitForAssertion(() => {
       expect(slackWebhook?.value).toBe("");
     });
+  });
+
+  it("asks users to save before sending a test notification", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Slack");
+    });
+
+    const slackTest = findButton(container, "테스트");
+
+    expect(slackTest).not.toBeUndefined();
+
+    await act(async () => {
+      slackTest?.click();
+    });
+
+    expect(container.textContent).toContain("테스트 전에 먼저 저장하세요.");
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith("/api/notification-settings/slack/test") &&
+          init?.method === "POST",
+      ),
+    ).toBe(false);
   });
 
   it("keeps Slack enabled after save when the follow-up settings refetch fails", async () => {
@@ -302,7 +334,7 @@ describe("NotificationSettingsPage", () => {
     const slackEnabled = container.querySelector<HTMLInputElement>(
       'input[aria-label="Slack 활성화"]',
     );
-    const slackSave = findButton(container, "Slack 저장");
+    const slackSave = findButton(container, "저장");
 
     expect(slackEnabled).not.toBeNull();
     expect(slackSave).not.toBeUndefined();
@@ -337,7 +369,7 @@ describe("NotificationSettingsPage", () => {
     const discordWebhook = container.querySelector<HTMLInputElement>(
       'input[aria-label="Discord Webhook URL"]',
     );
-    const slackSave = findButton(container, "Slack 저장");
+    const slackSave = findButton(container, "저장");
 
     expect(slackWebhook).not.toBeNull();
     expect(discordWebhook).not.toBeNull();
@@ -435,7 +467,7 @@ describe("NotificationSettingsPage", () => {
     const slackEnabled = container.querySelector<HTMLInputElement>(
       'input[aria-label="Slack 활성화"]',
     );
-    const slackDelete = findButton(container, "Slack 삭제");
+    const slackDelete = findButton(container, "삭제");
 
     expect(slackEnabled).not.toBeNull();
     expect(slackDelete).not.toBeUndefined();
