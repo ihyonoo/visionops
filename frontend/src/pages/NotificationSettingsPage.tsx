@@ -18,11 +18,11 @@ const channels: Array<{ channel: NotificationChannelName; title: string }> = [
   { channel: "telegram", title: "Telegram" },
 ];
 
-const eventOptions: Array<{ key: keyof NotificationEvents; label: string }> = [
-  { key: "training_completed", label: "training completed" },
-  { key: "training_failed", label: "training failed" },
-  { key: "inference_completed", label: "inference completed" },
-  { key: "inference_failed", label: "inference failed" },
+const eventOptions: Array<{ key: keyof NotificationEvents; labelKey: string }> = [
+  { key: "training_completed", labelKey: "notificationSettings.event.trainingCompleted" },
+  { key: "training_failed", labelKey: "notificationSettings.event.trainingFailed" },
+  { key: "inference_completed", labelKey: "notificationSettings.event.inferenceCompleted" },
+  { key: "inference_failed", labelKey: "notificationSettings.event.inferenceFailed" },
 ];
 
 const defaultEvents: NotificationEvents = {
@@ -30,18 +30,6 @@ const defaultEvents: NotificationEvents = {
   inference_failed: false,
   training_completed: false,
   training_failed: false,
-};
-
-const labels = {
-  activate: "\uD65C\uC131\uD654",
-  delete: "\uC0AD\uC81C",
-  deleteError: "\uC0AD\uC81C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.",
-  save: "\uC800\uC7A5",
-  saveError: "\uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.",
-  storedToken: "\uC800\uC7A5\uB41C \uD1A0\uD070 \uC720\uC9C0",
-  storedWebhook: "\uC800\uC7A5\uB41C Webhook \uC720\uC9C0",
-  test: "\uD14C\uC2A4\uD2B8",
-  testError: "\uD14C\uC2A4\uD2B8 \uC804\uC1A1\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.",
 };
 
 function defaultSetting(channel: NotificationChannelName): NotificationSetting {
@@ -70,24 +58,35 @@ type NotificationChannelCardProps = {
 
 function NotificationChannelCard({ setting, title }: NotificationChannelCardProps) {
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
   const [enabled, setEnabled] = useState(setting.enabled);
   const [events, setEvents] = useState<NotificationEvents>(setting.events);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [botToken, setBotToken] = useState("");
   const [chatId, setChatId] = useState("");
+  const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
+    if (isDirty) return;
     setEnabled(setting.enabled);
     setEvents(setting.events);
     setWebhookUrl("");
     setBotToken("");
     setChatId("");
-  }, [setting]);
+  }, [isDirty, setting]);
+
+  function resetSecretDrafts() {
+    setWebhookUrl("");
+    setBotToken("");
+    setChatId("");
+  }
 
   const saveSetting = useMutation({
     mutationFn: (body: NotificationSettingUpdate) =>
       apiPut<NotificationSetting>(`/api/notification-settings/${setting.channel}`, body),
     onSuccess: () => {
+      resetSecretDrafts();
+      setIsDirty(false);
       queryClient.invalidateQueries({ queryKey: ["notification-settings"] });
     },
   });
@@ -103,6 +102,10 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
   const deleteSetting = useMutation({
     mutationFn: () => apiDelete(`/api/notification-settings/${setting.channel}`),
     onSuccess: () => {
+      setEnabled(false);
+      setEvents({ ...defaultEvents });
+      resetSecretDrafts();
+      setIsDirty(false);
       queryClient.invalidateQueries({ queryKey: ["notification-settings"] });
     },
   });
@@ -110,6 +113,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
   const isPending = saveSetting.isPending || testSetting.isPending || deleteSetting.isPending;
 
   function setEventEnabled(key: keyof NotificationEvents, checked: boolean) {
+    setIsDirty(true);
     setEvents((currentEvents) => ({
       ...currentEvents,
       [key]: checked,
@@ -155,32 +159,41 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
         <div className="form-grid">
           <label className="checkbox-row">
             <input
-              aria-label={`${title} ${labels.activate}`}
+              aria-label={t("notificationSettings.enableLabel", { channel: title })}
               checked={enabled}
-              onChange={(event) => setEnabled(event.target.checked)}
+              onChange={(event) => {
+                setIsDirty(true);
+                setEnabled(event.target.checked);
+              }}
               type="checkbox"
             />
-            <span>{labels.activate}</span>
+            <span>{t("notificationSettings.enabled")}</span>
           </label>
 
           {setting.channel === "telegram" ? (
             <>
               <label>
-                <span>Bot Token</span>
+                <span>{t("notificationSettings.botToken")}</span>
                 <input
                   aria-label="Telegram Bot Token"
                   autoComplete="off"
-                  onChange={(event) => setBotToken(event.target.value)}
-                  placeholder={setting.has_secret ? labels.storedToken : ""}
+                  onChange={(event) => {
+                    setIsDirty(true);
+                    setBotToken(event.target.value);
+                  }}
+                  placeholder={setting.has_secret ? t("notificationSettings.storedToken") : ""}
                   type="password"
                   value={botToken}
                 />
               </label>
               <label>
-                <span>Chat ID</span>
+                <span>{t("notificationSettings.chatId")}</span>
                 <input
                   aria-label="Telegram Chat ID"
-                  onChange={(event) => setChatId(event.target.value)}
+                  onChange={(event) => {
+                    setIsDirty(true);
+                    setChatId(event.target.value);
+                  }}
                   type="text"
                   value={chatId}
                 />
@@ -188,12 +201,15 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
             </>
           ) : (
             <label>
-              <span>Webhook URL</span>
+              <span>{t("notificationSettings.webhookUrl")}</span>
               <input
                 aria-label={`${title} Webhook URL`}
                 autoComplete="off"
-                onChange={(event) => setWebhookUrl(event.target.value)}
-                placeholder={setting.has_secret ? labels.storedWebhook : ""}
+                onChange={(event) => {
+                  setIsDirty(true);
+                  setWebhookUrl(event.target.value);
+                }}
+                placeholder={setting.has_secret ? t("notificationSettings.storedWebhook") : ""}
                 type="password"
                 value={webhookUrl}
               />
@@ -201,7 +217,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
           )}
 
           <fieldset>
-            <legend>Events</legend>
+            <legend>{t("notificationSettings.events")}</legend>
             {eventOptions.map((option) => (
               <label className="checkbox-row" key={option.key}>
                 <input
@@ -210,7 +226,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
                   onChange={(event) => setEventEnabled(option.key, event.target.checked)}
                   type="checkbox"
                 />
-                <span>{option.label}</span>
+                <span>{t(option.labelKey)}</span>
               </label>
             ))}
           </fieldset>
@@ -223,24 +239,24 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
         ) : null}
         {saveSetting.isError ? (
           <div className="notice notice--danger" role="alert">
-            {labels.saveError}
+            {t("notificationSettings.saveError")}
           </div>
         ) : null}
         {testSetting.isError ? (
           <div className="notice notice--danger" role="alert">
-            {labels.testError}
+            {t("notificationSettings.testError")}
           </div>
         ) : null}
         {deleteSetting.isError ? (
           <div className="notice notice--danger" role="alert">
-            {labels.deleteError}
+            {t("notificationSettings.deleteError")}
           </div>
         ) : null}
 
         <div className="button-row">
           <button className="primary-button" disabled={saveSetting.isPending} type="submit">
             <Bell aria-hidden="true" size={16} />
-            <span>{title} {labels.save}</span>
+            <span>{t("notificationSettings.saveChannel", { channel: title })}</span>
           </button>
           <button
             disabled={testSetting.isPending}
@@ -248,7 +264,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
             type="button"
           >
             <Send aria-hidden="true" size={16} />
-            <span>{title} {labels.test}</span>
+            <span>{t("notificationSettings.testChannel", { channel: title })}</span>
           </button>
           <button
             disabled={deleteSetting.isPending}
@@ -256,7 +272,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
             type="button"
           >
             <Trash2 aria-hidden="true" size={16} />
-            <span>{title} {labels.delete}</span>
+            <span>{t("notificationSettings.deleteChannel", { channel: title })}</span>
           </button>
         </div>
       </form>

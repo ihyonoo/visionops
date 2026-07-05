@@ -5,11 +5,14 @@ import { Simulate } from "react-dom/test-utils";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { NotificationSetting } from "../src/api/types";
 import { LanguageProvider } from "../src/i18n/LanguageProvider";
 import { NotificationSettingsPage } from "../src/pages/NotificationSettingsPage";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
+
+const mountedRoots: Array<{ container: HTMLDivElement; root: Root }> = [];
 
 function render(ui: React.ReactElement): { container: HTMLDivElement; root: Root } {
   const container = document.createElement("div");
@@ -30,6 +33,7 @@ function render(ui: React.ReactElement): { container: HTMLDivElement; root: Root
     );
   });
 
+  mountedRoots.push({ container, root });
   return { container, root };
 }
 
@@ -62,7 +66,7 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 1000) {
   throw lastError;
 }
 
-const defaultSettings = [
+const defaultSettings: NotificationSetting[] = [
   {
     channel: "slack",
     enabled: false,
@@ -111,43 +115,58 @@ const defaultSettings = [
 ];
 
 afterEach(() => {
+  for (const { container, root } of mountedRoots.splice(0)) {
+    act(() => root.unmount());
+    container.remove();
+  }
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
 
+function createFetchMock(settings = defaultSettings) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+
+    if (url.endsWith("/api/notification-settings") && (!init?.method || init.method === "GET")) {
+      return new Response(JSON.stringify(settings), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
+
+    if (url.endsWith("/api/notification-settings/slack") && init?.method === "PUT") {
+      return new Response(JSON.stringify({ ...settings[0], ...JSON.parse(String(init.body)) }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
+
+    return new Response(JSON.stringify({ detail: "not found" }), {
+      headers: { "Content-Type": "application/json" },
+      status: 404,
+    });
+  });
+}
+
+function findButton(container: HTMLElement, name: string) {
+  return Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
+    button.textContent?.includes(name),
+  );
+}
+
 describe("NotificationSettingsPage", () => {
   it("renders supported channels and saves Slack webhook settings", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-
-      if (url.endsWith("/api/notification-settings") && (!init?.method || init.method === "GET")) {
-        return new Response(JSON.stringify(defaultSettings), {
-          headers: { "Content-Type": "application/json" },
-          status: 200,
-        });
-      }
-
-      if (url.endsWith("/api/notification-settings/slack") && init?.method === "PUT") {
-        return new Response(JSON.stringify({ ...defaultSettings[0], ...JSON.parse(String(init.body)) }), {
-          headers: { "Content-Type": "application/json" },
-          status: 200,
-        });
-      }
-
-      return new Response(JSON.stringify({ detail: "not found" }), {
-        headers: { "Content-Type": "application/json" },
-        status: 404,
-      });
-    });
+    const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
 
-    const { container, root } = render(<NotificationSettingsPage />);
+    const { container } = render(<NotificationSettingsPage />);
 
     await waitForAssertion(() => {
       expect(container.textContent).toContain("Slack");
       expect(container.textContent).toContain("Discord");
       expect(container.textContent).toContain("Telegram");
     });
+    expect(container.textContent).not.toContain("notificationSettings.");
 
     const slackEnabled = container.querySelector<HTMLInputElement>(
       'input[aria-label="Slack 활성화"]',
@@ -155,9 +174,7 @@ describe("NotificationSettingsPage", () => {
     const slackWebhook = container.querySelector<HTMLInputElement>(
       'input[aria-label="Slack Webhook URL"]',
     );
-    const slackSave = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.includes("Slack 저장"),
-    );
+    const slackSave = findButton(container, "Slack 저장");
 
     expect(slackEnabled).not.toBeNull();
     expect(slackWebhook).not.toBeNull();
@@ -198,8 +215,98 @@ describe("NotificationSettingsPage", () => {
       },
       webhook_url: "https://hooks.slack.test/services/T1/B2/C3",
     });
+  });
 
-    act(() => root.unmount());
-    container.remove();
+  it("clears the saved Slack webhook field immediately after successful save", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Slack");
+    });
+
+    const slackWebhook = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Slack Webhook URL"]',
+    );
+    const slackSave = findButton(container, "Slack 저장");
+
+    expect(slackWebhook).not.toBeNull();
+    expect(slackSave).not.toBeUndefined();
+
+    await act(async () => {
+      if (slackWebhook) setInputValue(slackWebhook, "https://hooks.slack.test/services/clear");
+    });
+    await act(async () => {
+      slackSave?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(slackWebhook?.value).toBe("");
+    });
+  });
+
+  it("preserves an unsaved Discord webhook when Slack save refetches settings", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Discord");
+    });
+
+    const slackWebhook = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Slack Webhook URL"]',
+    );
+    const discordWebhook = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Discord Webhook URL"]',
+    );
+    const slackSave = findButton(container, "Slack 저장");
+
+    expect(slackWebhook).not.toBeNull();
+    expect(discordWebhook).not.toBeNull();
+    expect(slackSave).not.toBeUndefined();
+
+    await act(async () => {
+      if (discordWebhook) setInputValue(discordWebhook, "https://discord.test/unsaved");
+    });
+    await act(async () => {
+      if (slackWebhook) setInputValue(slackWebhook, "https://hooks.slack.test/services/refetch");
+    });
+    await act(async () => {
+      slackSave?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(
+        fetchMock.mock.calls.filter(
+          ([input, init]) =>
+            String(input).endsWith("/api/notification-settings") &&
+            (!init?.method || init.method === "GET"),
+        ).length,
+      ).toBeGreaterThan(1);
+    });
+    expect(discordWebhook?.value).toBe("https://discord.test/unsaved");
+  });
+
+  it("renders failed notification errors", async () => {
+    const fetchMock = createFetchMock([
+      {
+        ...defaultSettings[0],
+        last_error: "Slack webhook rejected",
+        last_status: "failed",
+      },
+      defaultSettings[1],
+      defaultSettings[2],
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Slack webhook rejected");
+    });
   });
 });
