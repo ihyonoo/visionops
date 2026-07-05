@@ -12,3 +12,4 @@ vision_ops_data/
 *.log
 *.pt
 docs/
+DESIGN.md
