@@ -1752,7 +1752,7 @@ describe("ProjectDetailPage", () => {
     act(() => {
       datasetRow?.click();
     });
-    expect(datasetRow?.dataset.selected).toBe("true");
+    expect(datasetRow?.dataset.selected).toBeUndefined();
 
     act(() => {
       datasetRow?.click();
@@ -1881,21 +1881,21 @@ describe("ProjectDetailPage", () => {
       datasetRow?.click();
     });
 
-    expect(datasetRow?.dataset.selected).toBe("true");
+    expect(datasetRow?.dataset.selected).toBeUndefined();
 
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
     });
 
     expect(container.querySelector(".dataset-row-detail")).not.toBeNull();
-    expect(datasetRow?.dataset.selected).toBe("true");
+    expect(datasetRow?.dataset.selected).toBeUndefined();
 
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
     });
 
     expect(container.querySelector(".dataset-row-detail")).toBeNull();
-    expect(datasetRow?.dataset.selected).toBe("true");
+    expect(datasetRow?.dataset.selected).toBeUndefined();
 
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
@@ -1910,7 +1910,7 @@ describe("ProjectDetailPage", () => {
     });
 
     expect(onTabChange).toHaveBeenCalledWith("training");
-    expect(datasetRow?.dataset.selected).toBe("true");
+    expect(datasetRow?.dataset.selected).toBeUndefined();
 
     act(() => {
       Array.from(selectedSplitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
@@ -2337,7 +2337,7 @@ describe("ProjectDetailPage", () => {
     container.remove();
   });
 
-  it("keeps a newly created dataset selected before the list refetch finishes", async () => {
+  it("shows a newly created dataset before the list refetch finishes", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const existingDataset = {
@@ -2482,10 +2482,9 @@ describe("ProjectDetailPage", () => {
         ).length,
       ).toBeGreaterThanOrEqual(2);
 
-      const selectedRows = Array.from(container.querySelectorAll<HTMLElement>(".dataset-row")).filter(
-        (row) => row.dataset.selected === "true",
-      );
-      expect(selectedRows[0]?.textContent).toContain("새 데이터셋");
+      const datasetRows = Array.from(container.querySelectorAll<HTMLElement>(".dataset-row"));
+      expect(datasetRows[0]?.textContent).toContain("새 데이터셋");
+      expect(container.querySelector(".dataset-row[data-selected='true']")).toBeNull();
       expect(container.querySelector("[role='dialog']")).toBeNull();
     });
 
@@ -4042,14 +4041,9 @@ describe("ProjectDetailPage", () => {
     expect(container.querySelector(".inference-run-row[data-selected='true']")).toBeNull();
 
     const folderRunSummary = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".inference-run-summary"),
-    ).find((button) => button.textContent?.includes("폴더 추론"));
-    act(() => {
-      folderRunSummary?.click();
-    });
-    expect(container.querySelector(".inference-run-row[data-selected='true']")?.textContent).toContain(
-      "폴더 추론",
-    );
+      container.querySelectorAll<HTMLElement>(".inference-run-summary"),
+    ).find((summary) => summary.textContent?.includes("폴더 추론"));
+    expect(folderRunSummary?.tagName).not.toBe("BUTTON");
     act(() => {
       folderRunSummary?.click();
     });

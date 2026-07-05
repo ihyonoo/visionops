@@ -17,7 +17,6 @@ import {
   DragEvent,
   FormEvent,
   Fragment,
-  KeyboardEvent,
   useEffect,
   useMemo,
   useRef,
@@ -671,11 +670,12 @@ export function ProjectDetailPage({
   const [editingDataset, setEditingDataset] = useState<Dataset | null>(null);
   const [deletingDataset, setDeletingDataset] = useState<Dataset | null>(null);
   const [datasetMenuId, setDatasetMenuId] = useState<string | null>(null);
+  const [optimisticDatasets, setOptimisticDatasets] = useState<Dataset[]>([]);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [labelFiles, setLabelFiles] = useState<File[]>([]);
   const [dataYamlFiles, setDataYamlFiles] = useState<File[]>([]);
-  const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [expandedSplitDatasetId, setExpandedSplitDatasetId] = useState<string | null>(null);
+  const [splitDialogDatasetId, setSplitDialogDatasetId] = useState<string | null>(null);
   const [splitDialogOpen, setSplitDialogOpen] = useState(false);
   const [splitMenuId, setSplitMenuId] = useState<string | null>(null);
   const [splitEditName, setSplitEditName] = useState("");
@@ -686,7 +686,6 @@ export function ProjectDetailPage({
   const [valRatioInput, setValRatioInput] = useState("");
   const [testRatioInput, setTestRatioInput] = useState("");
   const [seedInput, setSeedInput] = useState("");
-  const [pendingDatasetId, setPendingDatasetId] = useState<string | null>(null);
   const [trainingDrawerOpen, setTrainingDrawerOpen] = useState(false);
   const [advancedTrainingOpen, setAdvancedTrainingOpen] = useState(false);
   const [selectedTrainingRunId, setSelectedTrainingRunId] = useState<string | null>(null);
@@ -701,7 +700,6 @@ export function ProjectDetailPage({
   const [inferenceDialogOpen, setInferenceDialogOpen] = useState(false);
   const [inferenceArtifactId, setInferenceArtifactId] = useState("");
   const [expandedInferenceRunId, setExpandedInferenceRunId] = useState<string | null>(null);
-  const [selectedInferenceRunId, setSelectedInferenceRunId] = useState<string | null>(null);
   const [inferenceInputType, setInferenceInputType] = useState<"image" | "folder">("folder");
   const [inferenceFiles, setInferenceFiles] = useState<File[]>([]);
   const [inferenceConfig, setInferenceConfig] = useState(defaultInferenceConfig);
@@ -731,55 +729,6 @@ export function ProjectDetailPage({
   });
   const datasets = datasetsQuery.data ?? [];
 
-  const selectedDatasetFromList = useMemo(
-    () => datasetsQuery.data?.find((dataset) => dataset.id === selectedDatasetId) ?? null,
-    [datasetsQuery.data, selectedDatasetId],
-  );
-
-  const selectedDatasetQuery = useQuery({
-    enabled: Boolean(selectedDatasetId),
-    queryFn: () =>
-      apiGet<Dataset>(`/api/projects/${projectId}/datasets/${selectedDatasetId as string}`),
-    queryKey: ["projects", projectId, "datasets", selectedDatasetId],
-  });
-
-  useEffect(() => {
-    if (!datasetsQuery.data) return;
-    if (pendingDatasetId) {
-      if (selectedDatasetId !== pendingDatasetId) {
-        setPendingDatasetId(null);
-      }
-      return;
-    }
-    if (
-      selectedDatasetId &&
-      (datasetsQuery.data.some((dataset) => dataset.id === selectedDatasetId) ||
-        selectedDatasetQuery.data?.id === selectedDatasetId ||
-        selectedDatasetQuery.isFetching)
-    ) {
-      return;
-    }
-    if (selectedDatasetId) {
-      setSelectedDatasetId(null);
-      setExpandedSplitDatasetId(null);
-    }
-  }, [
-    datasetsQuery.data,
-    pendingDatasetId,
-    selectedDatasetId,
-    selectedDatasetQuery.data,
-    selectedDatasetQuery.isFetching,
-  ]);
-
-  const splitsQuery = useQuery({
-    enabled: Boolean(selectedDatasetId),
-    queryFn: () =>
-      apiGet<DatasetSplit[]>(
-        `/api/projects/${projectId}/datasets/${selectedDatasetId as string}/splits`,
-      ),
-    queryKey: ["projects", projectId, "datasets", selectedDatasetId, "splits"],
-  });
-
   const createDataset = useMutation({
     mutationFn: (body: FormData) =>
       apiPost<Dataset>(`/api/projects/${projectId}/datasets/upload`, body),
@@ -789,8 +738,10 @@ export function ProjectDetailPage({
       setImageFiles([]);
       setLabelFiles([]);
       setDataYamlFiles([]);
-      setPendingDatasetId(dataset.id);
-      setSelectedDatasetId(dataset.id);
+      setOptimisticDatasets((currentDatasets) => [
+        dataset,
+        ...currentDatasets.filter((currentDataset) => currentDataset.id !== dataset.id),
+      ]);
       queryClient.setQueryData<Dataset[]>(
         ["projects", projectId, "datasets"],
         (currentDatasets = []) => [
@@ -810,6 +761,11 @@ export function ProjectDetailPage({
       setEditingDataset(null);
       setDatasetEditName("");
       setDatasetMenuId(null);
+      setOptimisticDatasets((currentDatasets) =>
+        currentDatasets.map((currentDataset) =>
+          currentDataset.id === dataset.id ? dataset : currentDataset,
+        ),
+      );
       queryClient.setQueryData<Dataset[]>(
         ["projects", projectId, "datasets"],
         (currentDatasets = []) =>
@@ -829,6 +785,9 @@ export function ProjectDetailPage({
     onSuccess: (_result, datasetId) => {
       setDeletingDataset(null);
       setDatasetMenuId(null);
+      setOptimisticDatasets((currentDatasets) =>
+        currentDatasets.filter((currentDataset) => currentDataset.id !== datasetId),
+      );
       queryClient.setQueryData<Dataset[]>(
         ["projects", projectId, "datasets"],
         (currentDatasets = []) =>
@@ -838,31 +797,33 @@ export function ProjectDetailPage({
       queryClient.removeQueries({
         queryKey: ["projects", projectId, "datasets", datasetId, "splits"],
       });
-      if (selectedDatasetId === datasetId) {
-        setSelectedDatasetId(null);
-      }
       if (expandedSplitDatasetId === datasetId) {
         setExpandedSplitDatasetId(null);
+      }
+      if (splitDialogDatasetId === datasetId) {
+        setSplitDialogOpen(false);
+        setSplitDialogDatasetId(null);
       }
       queryClient.invalidateQueries({ queryKey: ["projects", projectId, "datasets"] });
     },
   });
 
   const createSplit = useMutation({
-    mutationFn: (body: DatasetSplitCreate) =>
+    mutationFn: ({ body, datasetId }: { body: DatasetSplitCreate; datasetId: string }) =>
       apiPost<DatasetSplit>(
-        `/api/projects/${projectId}/datasets/${selectedDatasetId as string}/splits`,
+        `/api/projects/${projectId}/datasets/${datasetId}/splits`,
         body,
       ),
-    onSuccess: () => {
+    onSuccess: (_split, { datasetId }) => {
       setSplitDialogOpen(false);
+      setSplitDialogDatasetId(null);
       setSplitName("");
       setTrainRatioInput("");
       setValRatioInput("");
       setTestRatioInput("");
       setSeedInput("");
       queryClient.invalidateQueries({
-        queryKey: ["projects", projectId, "datasets", selectedDatasetId, "splits"],
+        queryKey: ["projects", projectId, "datasets", datasetId, "splits"],
       });
     },
   });
@@ -918,11 +879,13 @@ export function ProjectDetailPage({
     },
   });
 
-  const selectedDataset = selectedDatasetQuery.data ?? selectedDatasetFromList;
-  const visibleDatasets =
-    selectedDataset && !datasets.some((dataset) => dataset.id === selectedDataset.id)
-      ? [selectedDataset, ...datasets]
-      : datasets;
+  const visibleDatasets = useMemo(() => {
+    const datasetIds = new Set(datasets.map((dataset) => dataset.id));
+    return [
+      ...optimisticDatasets.filter((dataset) => !datasetIds.has(dataset.id)),
+      ...datasets,
+    ];
+  }, [datasets, optimisticDatasets]);
 
   const trainingSplitQueries = useQueries({
     queries: visibleDatasets.map((dataset) => ({
@@ -985,8 +948,6 @@ export function ProjectDetailPage({
   });
   const selectedInferenceArtifactId = inferenceArtifactId || artifactOptions[0]?.artifact.id || "";
   const inferenceRuns = inferenceRunsQuery.data ?? [];
-  const selectedInferenceRun =
-    inferenceRuns.find((run) => run.id === selectedInferenceRunId) ?? null;
   const inferencePredictionQueries = useQueries({
     queries: inferenceRuns.map((run) => ({
       enabled: activeTab === "inference",
@@ -1060,13 +1021,6 @@ export function ProjectDetailPage({
   }, [artifactOptions, inferenceArtifactId]);
 
   useEffect(() => {
-    if (!inferenceRunsQuery.data) return;
-    if (selectedInferenceRunId && !inferenceRuns.some((run) => run.id === selectedInferenceRunId)) {
-      setSelectedInferenceRunId(null);
-    }
-  }, [inferenceRuns, inferenceRunsQuery.data, selectedInferenceRunId]);
-
-  useEffect(() => {
     const previousStatuses = previousInferenceStatusesRef.current;
     const nextStatuses = new Map<string, string>();
 
@@ -1094,7 +1048,6 @@ export function ProjectDetailPage({
 
   useEffect(() => {
     if (!focusedInferenceRunId) return;
-    setSelectedInferenceRunId(focusedInferenceRunId);
     setExpandedInferenceRunId(focusedInferenceRunId);
   }, [focusedInferenceRunId]);
 
@@ -1129,7 +1082,6 @@ export function ProjectDetailPage({
       setInferenceFiles([]);
       setInferenceDialogOpen(false);
       setExpandedInferenceRunId(run.id);
-      setSelectedInferenceRunId(run.id);
       queryClient.setQueryData<InferenceRun[]>(
         ["projects", projectId, "inference-runs"],
         (currentRuns = []) => [run, ...currentRuns.filter((currentRun) => currentRun.id !== run.id)],
@@ -1150,9 +1102,6 @@ export function ProjectDetailPage({
       queryClient.removeQueries({
         queryKey: ["projects", projectId, "inference-runs", run.id, "predictions"],
       });
-      if (selectedInferenceRunId === run.id) {
-        setSelectedInferenceRunId(null);
-      }
       if (expandedInferenceRunId === run.id) {
         setExpandedInferenceRunId(null);
       }
@@ -1240,8 +1189,7 @@ export function ProjectDetailPage({
 
   function openSplitDialog(datasetId: string) {
     createSplit.reset();
-    setPendingDatasetId(null);
-    setSelectedDatasetId(datasetId);
+    setSplitDialogDatasetId(datasetId);
     setExpandedSplitDatasetId(datasetId);
     setSplitDialogOpen(true);
   }
@@ -1254,6 +1202,7 @@ export function ProjectDetailPage({
     setValRatioInput("");
     setTestRatioInput("");
     setSeedInput("");
+    setSplitDialogDatasetId(null);
     createSplit.reset();
   }
 
@@ -1286,14 +1235,17 @@ export function ProjectDetailPage({
   function handleSplitSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedName = splitName.trim();
-    if (!selectedDatasetId || !trimmedName || ratioError || createSplit.isPending) return;
+    if (!splitDialogDatasetId || !trimmedName || ratioError || createSplit.isPending) return;
 
     createSplit.mutate({
-      name: trimmedName,
-      seed,
-      train_ratio: trainRatio,
-      val_ratio: valRatio,
-      test_ratio: testRatio,
+      body: {
+        name: trimmedName,
+        seed,
+        train_ratio: trainRatio,
+        val_ratio: valRatio,
+        test_ratio: testRatio,
+      },
+      datasetId: splitDialogDatasetId,
     });
   }
 
@@ -1341,7 +1293,6 @@ export function ProjectDetailPage({
       setSelectedTrainingRunId(null);
       return;
     }
-    setSelectedDatasetId(datasetId);
     setExpandedSplitDatasetId(datasetId);
     setTrainingSplitId(splitId);
   }
@@ -1495,21 +1446,8 @@ export function ProjectDetailPage({
     }));
   }
 
-  function handleSelectDataset(datasetId: string) {
-    setPendingDatasetId(null);
-    setSelectedDatasetId((currentId) => (currentId === datasetId ? null : datasetId));
-  }
-
   function toggleDatasetSplits(datasetId: string) {
-    setPendingDatasetId(null);
     setExpandedSplitDatasetId((currentId) => (currentId === datasetId ? null : datasetId));
-  }
-
-  function handleDatasetRowKeyDown(event: KeyboardEvent<HTMLElement>, datasetId: string) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      handleSelectDataset(datasetId);
-    }
   }
 
   return (
@@ -1539,21 +1477,14 @@ export function ProjectDetailPage({
               {visibleDatasets.map((dataset, index) => {
                 const datasetSplitsQuery = trainingSplitQueries[index];
                 const datasetSplits = datasetSplitsQuery?.data ?? [];
-                const isSelectedDataset = selectedDatasetId === dataset.id;
                 const isSplitExpanded = expandedSplitDatasetId === dataset.id;
 
                 return (
                   <Fragment key={dataset.id}>
                     <article
                       aria-label={dataset.name}
-                      aria-selected={isSelectedDataset}
                       className="dataset-row"
                       data-expanded={isSplitExpanded ? "true" : undefined}
-                      data-selected={isSelectedDataset ? "true" : undefined}
-                      onClick={() => handleSelectDataset(dataset.id)}
-                      onKeyDown={(event) => handleDatasetRowKeyDown(event, dataset.id)}
-                      role="button"
-                      tabIndex={0}
                     >
                       <span className="dataset-row__thumbnail" aria-hidden="true">
                         {dataset.image_count > 0 ? (
@@ -1881,7 +1812,7 @@ export function ProjectDetailPage({
                     <span>{t("form.name")}</span>
                     <input
                       autoFocus
-                      disabled={!selectedDatasetId}
+                      disabled={!splitDialogDatasetId}
                       onChange={(event) => setSplitName(event.target.value)}
                       placeholder={t("split.namePlaceholder")}
                       required
@@ -1893,7 +1824,7 @@ export function ProjectDetailPage({
                     <label className="field">
                       <span>Train</span>
                       <input
-                        disabled={!selectedDatasetId}
+                        disabled={!splitDialogDatasetId}
                         max={1}
                         min={0}
                         onChange={(event) => setTrainRatioInput(event.target.value)}
@@ -1906,7 +1837,7 @@ export function ProjectDetailPage({
                     <label className="field">
                       <span>Val</span>
                       <input
-                        disabled={!selectedDatasetId}
+                        disabled={!splitDialogDatasetId}
                         max={1}
                         min={0}
                         onChange={(event) => setValRatioInput(event.target.value)}
@@ -1919,7 +1850,7 @@ export function ProjectDetailPage({
                     <label className="field">
                       <span>Test</span>
                       <input
-                        disabled={!selectedDatasetId}
+                        disabled={!splitDialogDatasetId}
                         max={1}
                         min={0}
                         onChange={(event) => setTestRatioInput(event.target.value)}
@@ -1932,7 +1863,7 @@ export function ProjectDetailPage({
                     <label className="field">
                       <span>Seed</span>
                       <input
-                        disabled={!selectedDatasetId}
+                        disabled={!splitDialogDatasetId}
                         min={0}
                         onChange={(event) => setSeedInput(event.target.value)}
                         placeholder={t("split.seedPlaceholder")}
@@ -1964,7 +1895,7 @@ export function ProjectDetailPage({
                     <button
                       className="primary-button"
                       disabled={
-                        !selectedDatasetId ||
+                        !splitDialogDatasetId ||
                         !splitName.trim() ||
                         Boolean(ratioError) ||
                         createSplit.isPending
@@ -2864,20 +2795,8 @@ export function ProjectDetailPage({
                   const isExpanded = expandedInferenceRunId === run.id;
                   const predictionQuery = inferencePredictionQueries[index];
                   return (
-                    <article
-                      className="inference-run-row"
-                      data-selected={selectedInferenceRun?.id === run.id ? "true" : undefined}
-                      key={run.id}
-                    >
-                      <button
-                        className="inference-run-summary"
-                        onClick={() =>
-                          setSelectedInferenceRunId((currentId) =>
-                            currentId === run.id ? null : run.id,
-                          )
-                        }
-                        type="button"
-                      >
+                    <article className="inference-run-row" key={run.id}>
+                      <div className="inference-run-summary">
                         <div className="inference-run-thumbnail">
                           {thumbnailPrediction ? (
                             <img
@@ -2910,7 +2829,7 @@ export function ProjectDetailPage({
                           </div>
                           <code title={run.id}>{shortInternalId(run.id)}</code>
                         </div>
-                      </button>
+                      </div>
                       <div className="inference-run-actions">
                         <button
                           className="secondary-button"

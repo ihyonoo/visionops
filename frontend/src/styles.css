@@ -1914,14 +1914,7 @@ button {
   position: relative;
   grid-template-columns: 76px minmax(0, 1fr) auto;
   color: var(--text);
-  cursor: pointer;
   text-align: left;
-}
-
-.dataset-row:hover,
-.dataset-row:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  outline: 0;
 }
 
 .dataset-row__thumbnail {
@@ -1946,11 +1939,6 @@ button {
 .dataset-row__content {
   display: grid;
   gap: 7px;
-}
-
-.dataset-row[data-selected="true"] {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  background: var(--accent-soft);
 }
 
 .dataset-row[data-expanded="true"] {
@@ -3190,11 +3178,6 @@ button {
   background: var(--surface);
 }
 
-.inference-run-row[data-selected="true"] {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
 .inference-run-summary {
   min-width: 0;
   display: grid;
@@ -3206,7 +3189,6 @@ button {
   background: transparent;
   color: inherit;
   text-align: left;
-  cursor: pointer;
 }
 
 .inference-run-thumbnail {
@@ -3920,8 +3902,6 @@ textarea:focus-visible {
 .project-card:focus-visible,
 .training-result-card:hover,
 .training-result-card:focus-visible,
-.dataset-row:hover,
-.dataset-row:focus-visible,
 .training-run-row:hover,
 .training-split-option:hover {
   border-color: var(--border-strong);
@@ -3930,10 +3910,8 @@ textarea:focus-visible {
 }
 
 .project-card[data-selected="true"],
-.dataset-row[data-selected="true"],
 .training-run-row[data-selected="true"],
 .training-split-option[data-selected="true"],
-.inference-run-row[data-selected="true"],
 .data-table tr[data-selected="true"] td {
   border-color: color-mix(in srgb, var(--text) 18%, var(--border));
   background: var(--surface);

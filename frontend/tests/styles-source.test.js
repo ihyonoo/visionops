@@ -103,15 +103,17 @@ describe("styles source", () => {
     expect(brandImageRule).toContain("object-fit: contain");
   });
 
-  it("marks selected list rows without a gray filled background", () => {
+  it("marks actionable selected rows without a gray filled background", () => {
     const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     const selectedRule = styles.match(
-      /\.dataset-row\[data-selected="true"\],[\s\S]*?\.data-table tr\[data-selected="true"\] td\s*\{(?<body>[\s\S]*?)\n\}/u,
+      /\.project-card\[data-selected="true"\],[\s\S]*?\.data-table tr\[data-selected="true"\] td\s*\{(?<body>[\s\S]*?)\n\}/u,
     )?.groups?.body;
 
     expect(selectedRule).toContain("background: var(--surface)");
     expect(selectedRule).toContain("box-shadow: inset 3px 0 0");
     expect(selectedRule).not.toContain("var(--surface-subtle)");
+    expect(styles).not.toContain(".dataset-row[data-selected=\"true\"]");
+    expect(styles).not.toContain(".inference-run-row[data-selected=\"true\"]");
     expect(styles).toMatch(/\.project-sidebar__row\[data-selected="true"\]\s*\{[^}]*?background:\s*transparent/u);
     expect(styles).toMatch(/\.data-table tbody tr\[data-selected="true"\]:hover td\s*\{[^}]*?background:\s*var\(--surface\)/u);
   });
