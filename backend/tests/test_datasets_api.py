@@ -151,6 +151,32 @@ def test_upload_classification_dataset_returns_400(client):
     assert response.json()["detail"] == "Classification 데이터셋은 경로 등록을 먼저 지원합니다."
 
 
+def test_upload_cleans_dataset_root_when_inventory_fails(client, monkeypatch):
+    from app.api.routes import datasets as datasets_route
+
+    project_id = create_project(client)
+
+    def fail_validate_yolo_dataset(dataset_root: Path):
+        raise RuntimeError("inventory failed")
+
+    monkeypatch.setattr(datasets_route, "validate_yolo_dataset", fail_validate_yolo_dataset)
+
+    response = client.post(
+        f"/api/projects/{project_id}/datasets/upload",
+        data={"name": "line-a-upload"},
+        files=[
+            ("images", ("images/part.jpg", _image_bytes(), "image/jpeg")),
+            ("labels", ("labels/part.txt", b"0 0.5 0.5 0.25 0.25\n", "text/plain")),
+            ("data_yaml", ("data.yaml", yaml.safe_dump({"names": ["scratch"]}), "text/yaml")),
+        ],
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "데이터셋 저장에 실패했습니다."
+    dataset_parent = settings.artifact_root / "projects" / project_id / "datasets"
+    assert not dataset_parent.exists() or not any(dataset_parent.iterdir())
+
+
 def test_dataset_thumbnail_serves_first_dataset_image(client, tmp_path):
     project_id = create_project(client)
     dataset_path = make_dataset(tmp_path / "dataset")
@@ -162,6 +188,35 @@ def test_dataset_thumbnail_serves_first_dataset_image(client, tmp_path):
     dataset_id = created.json()["id"]
 
     response = client.get(f"/api/projects/{project_id}/datasets/{dataset_id}/thumbnail")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/")
+    assert response.content
+
+
+def test_classification_dataset_thumbnail_serves_first_class_image(client, tmp_path):
+    with SessionLocal() as db:
+        project = Project(
+            id="project-cls",
+            name="분류",
+            slug="classification",
+            description="",
+            task_type="classification",
+        )
+        db.add(project)
+        db.commit()
+    for class_name in ("ok", "ng"):
+        class_dir = tmp_path / "cls" / class_name
+        class_dir.mkdir(parents=True)
+        Image.new("RGB", (16, 16), color="white").save(class_dir / f"{class_name}.jpg")
+    created = client.post(
+        "/api/projects/project-cls/datasets",
+        json={"name": "cls", "source_path": str(tmp_path / "cls")},
+    )
+    assert created.status_code == 201
+    dataset_id = created.json()["id"]
+
+    response = client.get(f"/api/projects/project-cls/datasets/{dataset_id}/thumbnail")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/")

@@ -102,7 +102,7 @@ def test_create_classification_split_uses_class_folder_layout(client, tmp_path):
             name="분류",
             slug="classification",
             description="",
-            task_type="classification",
+            task_type="detection",
         )
         db.add(project)
         dataset_root = tmp_path / "cls"
@@ -141,7 +141,16 @@ def test_create_classification_split_uses_class_folder_layout(client, tmp_path):
     body = response.json()
     assert body["train_count"] == 2
     assert body["val_count"] == 2
-    assert Path(body["dataset_yaml_path"]).is_dir()
+    assert Path(body["dataset_yaml_path"]).is_file()
+    assert Path(body["split_path"]).is_dir()
+    data_yaml = yaml.safe_load(Path(body["dataset_yaml_path"]).read_text(encoding="utf-8"))
+    assert data_yaml == {
+        "task": "classification",
+        "path": body["split_path"],
+        "train": "train",
+        "val": "val",
+        "names": ["ng", "ok"],
+    }
     assert (Path(body["split_path"]) / "train" / "ok").is_dir()
 
 

@@ -2,6 +2,7 @@ import shutil
 from pathlib import Path
 from typing import Annotated
 
+import yaml
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -64,6 +65,29 @@ def _is_managed_split_path(path: Path, project_id: str, dataset_id: str) -> bool
     return managed_root in resolved_path.parents
 
 
+def _write_classification_dataset_yaml(
+    *,
+    split_root: Path,
+    dataset: Dataset,
+    test_count: int,
+) -> Path:
+    dataset_yaml_path = split_root / "data.yaml"
+    data_yaml = {
+        "task": "classification",
+        "path": str(split_root),
+        "train": "train",
+        "val": "val",
+        "names": dataset.class_names,
+    }
+    if test_count > 0:
+        data_yaml["test"] = "test"
+    dataset_yaml_path.write_text(
+        yaml.safe_dump(data_yaml, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return dataset_yaml_path
+
+
 @router.post("", response_model=DatasetSplitRead, status_code=status.HTTP_201_CREATED)
 def create_split(
     project_id: str,
@@ -86,16 +110,14 @@ def create_split(
             detail="train_ratio, val_ratio, test_ratio의 합은 1.0이어야 합니다.",
         )
 
-    project = _require_project(db, project_id)
-    dataset = db.get(Dataset, dataset_id)
-    if dataset is None or dataset.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+    dataset = _require_dataset(db, project_id, dataset_id)
 
     split_id = new_id("spl")
     split_root = StoragePaths(settings.artifact_root).split_dir(project_id, dataset_id, split_id)
+    is_classification = dataset.format == "yolo-classification"
     split_function = (
         create_classification_copy_split
-        if project.task_type == "classification"
+        if is_classification
         else create_copy_split
     )
     try:
@@ -107,6 +129,13 @@ def create_split(
             test_ratio=payload.test_ratio,
             seed=payload.seed,
         )
+        dataset_yaml_path = split_result.dataset_yaml_path
+        if is_classification:
+            dataset_yaml_path = _write_classification_dataset_yaml(
+                split_root=split_root,
+                dataset=dataset,
+                test_count=split_result.test_count,
+            )
     except (OSError, ValueError) as exc:
         _remove_split_root(split_root)
         raise HTTPException(
@@ -126,7 +155,7 @@ def create_split(
         val_count=split_result.val_count,
         test_count=split_result.test_count,
         split_path=str(split_root),
-        dataset_yaml_path=str(split_result.dataset_yaml_path),
+        dataset_yaml_path=str(dataset_yaml_path),
     )
     try:
         db.add(split)

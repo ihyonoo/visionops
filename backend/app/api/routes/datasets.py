@@ -45,7 +45,11 @@ def _require_dataset(db: Session, project_id: str, dataset_id: str) -> Dataset:
 
 
 def _first_dataset_image(dataset: Dataset) -> Path | None:
-    images_root = Path(dataset.source_path) / "images"
+    dataset_root = Path(dataset.source_path)
+    if dataset.format == "yolo-classification":
+        images_root = dataset_root
+    else:
+        images_root = dataset_root / "images"
     if not images_root.is_dir():
         return None
     for image_path in sorted(images_root.rglob("*")):
@@ -179,33 +183,38 @@ def upload_dataset(
             detail="Classification 데이터셋은 경로 등록을 먼저 지원합니다.",
         )
     dataset_id = new_id("ds")
-    dataset_root = _save_dataset_upload(
-        project_id=project_id,
-        dataset_id=dataset_id,
-        images=images,
-        labels=labels,
-        data_yaml=data_yaml,
-    )
-    class_names, image_count, label_count, validation_status, validation_summary = (
-        _dataset_inventory_for_project(project, dataset_root)
-    )
-
-    dataset = Dataset(
-        id=dataset_id,
-        project_id=project_id,
-        name=name.strip(),
-        source_path=str(dataset_root),
-        format="yolo",
-        class_names=class_names,
-        image_count=image_count,
-        label_count=label_count,
-        validation_status=validation_status,
-        validation_summary=validation_summary,
-    )
+    dataset_root = StoragePaths(settings.artifact_root).dataset_dir(project_id, dataset_id)
     try:
+        dataset_root = _save_dataset_upload(
+            project_id=project_id,
+            dataset_id=dataset_id,
+            images=images,
+            labels=labels,
+            data_yaml=data_yaml,
+        )
+        class_names, image_count, label_count, validation_status, validation_summary = (
+            _dataset_inventory_for_project(project, dataset_root)
+        )
+
+        dataset = Dataset(
+            id=dataset_id,
+            project_id=project_id,
+            name=name.strip(),
+            source_path=str(dataset_root),
+            format="yolo",
+            class_names=class_names,
+            image_count=image_count,
+            label_count=label_count,
+            validation_status=validation_status,
+            validation_summary=validation_summary,
+        )
         db.add(dataset)
         db.commit()
         db.refresh(dataset)
+    except HTTPException:
+        db.rollback()
+        shutil.rmtree(dataset_root, ignore_errors=True)
+        raise
     except Exception as exc:
         db.rollback()
         shutil.rmtree(dataset_root, ignore_errors=True)
