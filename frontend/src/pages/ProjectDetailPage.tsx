@@ -43,6 +43,7 @@ import type {
   DatasetSplitUpdate,
   InferencePrediction,
   InferenceRun,
+  JsonObject,
   ModelArtifact,
   Project,
   RuntimeCheck,
@@ -541,6 +542,20 @@ function predictionImageUrl(
   return apiUrl(
     `/api/projects/${projectId}/inference-runs/${runId}/predictions/${prediction.id}/image?v=${cacheKey}`,
   );
+}
+
+function formatPredictionConfidence(value: number): string {
+  if (!Number.isFinite(value)) return "0%";
+  return `${(value * 100).toFixed(1).replace(/\.?0+$/u, "")}%`;
+}
+
+function classificationRankingEntries(prediction: InferencePrediction) {
+  const ranking = prediction.prediction_json.ranking;
+  if (!Array.isArray(ranking)) return [];
+
+  return ranking
+    .filter((entry): entry is JsonObject => entry !== null && typeof entry === "object" && !Array.isArray(entry))
+    .slice(0, 5);
 }
 
 function formatCount(value: number | null | undefined, language: Language): string {
@@ -2990,6 +3005,21 @@ export function ProjectDetailPage({
                                 const hasRenderedImage = Boolean(prediction.output_image_path);
                                 const imageLabel = fileName(prediction.image_path);
                                 const imageSrc = predictionImageUrl(projectId, run.id, prediction);
+                                if (isClassificationProject) {
+                                  const ranking = classificationRankingEntries(prediction);
+                                  return (
+                                    <article className="prediction-card" key={prediction.id}>
+                                      <div className="prediction-ranking">
+                                        {ranking.map((entry, rankIndex) => (
+                                          <span key={`${prediction.id}-${String(entry.class_name)}-${rankIndex}`}>
+                                            {String(entry.class_name)}:{" "}
+                                            {formatPredictionConfidence(Number(entry.confidence || 0))}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </article>
+                                  );
+                                }
                                 return (
                                   <article className="prediction-card" key={prediction.id}>
                                     {hasRenderedImage ? (

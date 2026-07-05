@@ -13,9 +13,9 @@ type TrainingManagementPageProps = {
   projectId: string;
 };
 
-type TrainingSortKey = "latest" | "oldest" | "name" | "map50" | "precision" | "recall";
+type TrainingSortKey = "latest" | "oldest" | "name" | "map50" | "precision" | "recall" | "accuracy_top1";
 
-const sortOptions: Array<{ key: TrainingSortKey; labelKey: string }> = [
+const detectionSortOptions: Array<{ key: TrainingSortKey; label?: string; labelKey?: string }> = [
   { key: "latest", labelKey: "trainingManagement.sortLatest" },
   { key: "oldest", labelKey: "trainingManagement.sortOldest" },
   { key: "map50", labelKey: "trainingManagement.sortMap50" },
@@ -24,7 +24,18 @@ const sortOptions: Array<{ key: TrainingSortKey; labelKey: string }> = [
   { key: "name", labelKey: "trainingManagement.sortName" },
 ];
 
-const metricSortKeys: Record<Extract<TrainingSortKey, "map50" | "precision" | "recall">, string[]> = {
+const classificationSortOptions: Array<{ key: TrainingSortKey; label?: string; labelKey?: string }> = [
+  { key: "latest", labelKey: "trainingManagement.sortLatest" },
+  { key: "oldest", labelKey: "trainingManagement.sortOldest" },
+  { key: "accuracy_top1", label: "Top-1 accuracy" },
+  { key: "name", labelKey: "trainingManagement.sortName" },
+];
+
+const metricSortKeys: Record<
+  Extract<TrainingSortKey, "map50" | "precision" | "recall" | "accuracy_top1">,
+  string[]
+> = {
+  accuracy_top1: ["best_accuracy_top1"],
   map50: ["best_mAP50", "metrics/mAP50(B)", "mAP50"],
   precision: ["best_precision", "metrics/precision(B)", "precision"],
   recall: ["best_recall", "metrics/recall(B)", "recall"],
@@ -51,6 +62,10 @@ function metricLabel(key: string): string {
     "best_mAP50-95": "mAP50-95",
     best_precision: "Precision",
     best_recall: "Recall",
+    best_accuracy_top1: "Top-1 accuracy",
+    best_accuracy_top5: "Top-5 accuracy",
+    last_train_loss: "Train loss",
+    last_val_loss: "Validation loss",
     "metrics/mAP50(B)": "mAP50",
     "metrics/mAP50-95(B)": "mAP50-95",
     "metrics/precision(B)": "Precision",
@@ -91,26 +106,36 @@ function compareNullableMetric(left: number | null, right: number | null): numbe
   return right - left;
 }
 
-function trainingRunMetrics(summary: JsonObject | null): Array<{ key: string; label: string; value: number }> {
+function trainingRunMetrics(
+  summary: JsonObject | null,
+  isClassificationProject: boolean,
+): Array<{ key: string; label: string; value: number }> {
   if (!summary) return [];
-  const priorityKeys = [
-    "best_mAP50",
-    "best_mAP50_95",
-    "best_mAP50-95",
-    "best_precision",
-    "best_recall",
-    "metrics/mAP50(B)",
-    "metrics/mAP50-95(B)",
-    "metrics/precision(B)",
-    "metrics/recall(B)",
-  ];
+  const priorityKeys = isClassificationProject
+    ? [
+        "best_accuracy_top1",
+        "best_accuracy_top5",
+        "last_val_loss",
+        "last_train_loss",
+      ]
+    : [
+        "best_mAP50",
+        "best_mAP50_95",
+        "best_mAP50-95",
+        "best_precision",
+        "best_recall",
+        "metrics/mAP50(B)",
+        "metrics/mAP50-95(B)",
+        "metrics/precision(B)",
+        "metrics/recall(B)",
+      ];
   const keys = [
     ...priorityKeys.filter((key) => isFiniteNumber(summary[key])),
     ...Object.keys(summary).filter(
       (key) => !priorityKeys.includes(key) && isFiniteNumber(summary[key]),
     ),
   ];
-  return keys.slice(0, 3).map((key) => ({
+  return keys.slice(0, isClassificationProject ? 4 : 3).map((key) => ({
     key,
     label: metricLabel(key),
     value: summary[key] as number,
@@ -135,6 +160,8 @@ export function TrainingManagementPage({
     refetchInterval: workRunsQueryRefetchInterval,
   });
   const trainingRuns = trainingRunsQuery.data ?? [];
+  const isClassificationProject = projectQuery.data?.task_type === "classification";
+  const sortOptions = isClassificationProject ? classificationSortOptions : detectionSortOptions;
   const sortedTrainingRuns = useMemo(() => {
     return [...trainingRuns].sort((left, right) => {
       if (sortKey === "name") {
@@ -147,7 +174,12 @@ export function TrainingManagementPage({
       if (sortKey === "oldest") {
         return runFreshness(left) - runFreshness(right);
       }
-      if (sortKey === "map50" || sortKey === "precision" || sortKey === "recall") {
+      if (
+        sortKey === "map50" ||
+        sortKey === "precision" ||
+        sortKey === "recall" ||
+        sortKey === "accuracy_top1"
+      ) {
         const metricCompare = compareNullableMetric(
           summaryMetricValue(left.metrics_summary, metricSortKeys[sortKey]),
           summaryMetricValue(right.metrics_summary, metricSortKeys[sortKey]),
@@ -193,7 +225,7 @@ export function TrainingManagementPage({
                   >
                     {sortOptions.map((option) => (
                       <option key={option.key} value={option.key}>
-                        {t(option.labelKey)}
+                        {option.labelKey ? t(option.labelKey) : option.label}
                       </option>
                     ))}
                   </select>
@@ -204,7 +236,7 @@ export function TrainingManagementPage({
             {trainingRuns.length > 0 ? (
               <div className="training-result-card-grid">
                 {sortedTrainingRuns.map((run) => {
-                  const metrics = trainingRunMetrics(run.metrics_summary);
+                  const metrics = trainingRunMetrics(run.metrics_summary, isClassificationProject);
                   return (
                     <button
                       className="training-result-card"

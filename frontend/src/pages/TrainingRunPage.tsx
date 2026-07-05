@@ -24,6 +24,10 @@ const SUMMARY_PRIORITY_KEYS = [
   "best_mAP50-95",
   "best_precision",
   "best_recall",
+  "best_accuracy_top1",
+  "best_accuracy_top5",
+  "last_val_loss",
+  "last_train_loss",
   "metrics/mAP50(B)",
   "metrics/mAP50-95(B)",
   "metrics/precision(B)",
@@ -35,6 +39,8 @@ const SUMMARY_PRIORITY_KEYS = [
 ];
 
 const LOSS_PRIORITY_KEYS = [
+  "last_val_loss",
+  "last_train_loss",
   "train/box_loss",
   "train/cls_loss",
   "train/dfl_loss",
@@ -53,6 +59,13 @@ const QUALITY_PRIORITY_KEYS = [
   "precision",
   "recall",
   "fitness",
+];
+
+const CLASSIFICATION_QUALITY_KEYS = [
+  "best_accuracy_top1",
+  "best_accuracy_top5",
+  "last_val_loss",
+  "last_train_loss",
 ];
 
 function formatDateTime(value: string | null | undefined, language: Language): string {
@@ -100,7 +113,11 @@ function metricLabel(key: string): string {
     "best_mAP50-95": "mAP50-95",
     best_precision: "Precision",
     best_recall: "Recall",
+    best_accuracy_top1: "Top-1 accuracy",
+    best_accuracy_top5: "Top-5 accuracy",
     last_epoch: "Last epoch",
+    last_train_loss: "Train loss",
+    last_val_loss: "Validation loss",
     "metrics/mAP50(B)": "mAP50",
     "metrics/mAP50-95(B)": "mAP50-95",
     "metrics/precision(B)": "Precision",
@@ -243,8 +260,8 @@ export function TrainingRunPage({ initialRun, onBackToList, projectId, runId }: 
     () =>
       orderedNumericKeys(
         rows,
-        QUALITY_PRIORITY_KEYS,
-        (key) => /map|precision|recall|fitness/iu.test(key),
+        [...CLASSIFICATION_QUALITY_KEYS, ...QUALITY_PRIORITY_KEYS],
+        (key) => /accuracy|map|precision|recall|fitness/iu.test(key),
       ),
     [rows],
   );
