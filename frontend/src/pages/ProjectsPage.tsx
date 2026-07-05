@@ -3,7 +3,7 @@ import { FolderPlus, Loader2, MoreVertical, Pencil, Plus, Trash2, X } from "luci
 import { FormEvent, KeyboardEvent, useState } from "react";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiUrl } from "../api/client";
-import type { Project, ProjectCreate, ProjectUpdate } from "../api/types";
+import type { Project, ProjectCreate, ProjectTaskType, ProjectUpdate } from "../api/types";
 import { useLanguage, type Language } from "../i18n/LanguageProvider";
 
 type ProjectsPageProps = {
@@ -40,6 +40,10 @@ function ProjectThumbnail({ project }: { project: Project }) {
   );
 }
 
+function projectTaskTypeLabel(project: Project, t: ReturnType<typeof useLanguage>["t"]): string {
+  return project.task_type === "classification" ? t("projects.classification") : t("projects.detection");
+}
+
 export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjectId }: ProjectsPageProps) {
   const queryClient = useQueryClient();
   const { language, t } = useLanguage();
@@ -49,6 +53,7 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
   const [menuProjectId, setMenuProjectId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [taskType, setTaskType] = useState<ProjectTaskType>("detection");
 
   const projectsQuery = useQuery({
     queryFn: () => apiGet<Project[]>("/api/projects"),
@@ -60,6 +65,7 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
     onSuccess: (project) => {
       setName("");
       setDescription("");
+      setTaskType("detection");
       setCreateDialogOpen(false);
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       onSelectProject(project.id);
@@ -74,6 +80,7 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
       setMenuProjectId(null);
       setName("");
       setDescription("");
+      setTaskType("detection");
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       queryClient.invalidateQueries({ queryKey: ["projects", project.id] });
     },
@@ -100,6 +107,7 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
     setCreateDialogOpen(false);
     setName("");
     setDescription("");
+    setTaskType("detection");
     createProject.reset();
   }
 
@@ -109,6 +117,7 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
     setEditingProject(project);
     setName(project.name);
     setDescription(project.description);
+    setTaskType(project.task_type);
   }
 
   function closeEditDialog() {
@@ -116,6 +125,7 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
     setEditingProject(null);
     setName("");
     setDescription("");
+    setTaskType("detection");
     updateProject.reset();
   }
 
@@ -139,6 +149,7 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
     createProject.mutate({
       description: description.trim(),
       name: trimmedName,
+      task_type: taskType,
     });
   }
 
@@ -151,6 +162,7 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
       body: {
         description: description.trim(),
         name: trimmedName,
+        task_type: taskType,
       },
     });
   }
@@ -245,7 +257,7 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
                       <small>{project.description || "-"}</small>
                     </span>
                     <span className="project-card__meta">
-                      <span>{project.task_type === "detection" ? t("projects.detection") : project.task_type}</span>
+                      <span>{projectTaskTypeLabel(project, t)}</span>
                       <span>{t("projects.columnUpdated")} {formatDate(project.updated_at, language)}</span>
                     </span>
                   </article>
@@ -306,6 +318,18 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
                   rows={4}
                   value={description}
                 />
+              </label>
+
+              <label className="field">
+                <span>{t("projects.taskType")}</span>
+                <select
+                  aria-label={t("projects.taskType")}
+                  onChange={(event) => setTaskType(event.target.value as ProjectTaskType)}
+                  value={taskType}
+                >
+                  <option value="detection">{t("projects.detection")}</option>
+                  <option value="classification">{t("projects.classification")}</option>
+                </select>
               </label>
 
               {createProject.isError ? (
@@ -381,6 +405,18 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
                   rows={4}
                   value={description}
                 />
+              </label>
+
+              <label className="field">
+                <span>{t("projects.taskType")}</span>
+                <select
+                  aria-label={t("projects.taskType")}
+                  onChange={(event) => setTaskType(event.target.value as ProjectTaskType)}
+                  value={taskType}
+                >
+                  <option value="detection">{t("projects.detection")}</option>
+                  <option value="classification">{t("projects.classification")}</option>
+                </select>
               </label>
 
               {updateProject.isError ? (

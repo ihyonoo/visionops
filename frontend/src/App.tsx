@@ -8,7 +8,7 @@ import { Layout, type AppNotification, type ProjectSort } from "./components/Lay
 import { TrainingQueueWidget, type WorkCompletionNotification } from "./components/TrainingQueueWidget";
 import { LanguageProvider, useLanguage } from "./i18n/LanguageProvider";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
-import type { Project, ProjectCreate } from "./api/types";
+import type { Project, ProjectCreate, ProjectTaskType } from "./api/types";
 import type { DetailTab } from "./pages/ProjectDetailPage";
 import { NotificationSettingsPage } from "./pages/NotificationSettingsPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
@@ -209,6 +209,7 @@ function AppContent() {
   const [sidebarCreateDialogOpen, setSidebarCreateDialogOpen] = useState(false);
   const [sidebarProjectName, setSidebarProjectName] = useState("");
   const [sidebarProjectDescription, setSidebarProjectDescription] = useState("");
+  const [sidebarProjectTaskType, setSidebarProjectTaskType] = useState<ProjectTaskType>("detection");
   const [notifications, setNotifications] = useState<WorkCompletionNotification[]>([]);
   const [focusedTrainingRunId, setFocusedTrainingRunId] = useState<string | null>(
     initialHistoryState.trainingRunId ?? null,
@@ -268,6 +269,7 @@ function AppContent() {
       setSidebarCreateDialogOpen(false);
       setSidebarProjectName("");
       setSidebarProjectDescription("");
+      setSidebarProjectTaskType("detection");
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       window.history.pushState(nextState, "", appPath(project.id, nextSection, null, [
         project,
@@ -500,6 +502,7 @@ function AppContent() {
     setSidebarCreateDialogOpen(false);
     setSidebarProjectName("");
     setSidebarProjectDescription("");
+    setSidebarProjectTaskType("detection");
     createSidebarProject.reset();
   }
 
@@ -510,6 +513,7 @@ function AppContent() {
     createSidebarProject.mutate({
       description: sidebarProjectDescription.trim(),
       name: trimmedName,
+      task_type: sidebarProjectTaskType,
     });
   }
 
@@ -639,6 +643,20 @@ function AppContent() {
                   rows={4}
                   value={sidebarProjectDescription}
                 />
+              </label>
+
+              <label className="field">
+                <span>{t("projects.taskType")}</span>
+                <select
+                  aria-label={t("projects.taskType")}
+                  onChange={(event) =>
+                    setSidebarProjectTaskType(event.target.value as ProjectTaskType)
+                  }
+                  value={sidebarProjectTaskType}
+                >
+                  <option value="detection">{t("projects.detection")}</option>
+                  <option value="classification">{t("projects.classification")}</option>
+                </select>
               </label>
 
               {createSidebarProject.isError ? (

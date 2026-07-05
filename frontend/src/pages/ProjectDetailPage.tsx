@@ -44,6 +44,7 @@ import type {
   InferencePrediction,
   InferenceRun,
   ModelArtifact,
+  Project,
   RuntimeCheck,
   TrainingRun,
   TrainingRunCreate,
@@ -91,6 +92,14 @@ const defaultTrainingConfig = {
 type TrainingConfigState = typeof defaultTrainingConfig;
 type TrainingPresetKey = "balanced" | "fast" | "cpu" | "accuracy";
 type TrainingModelGroup = "YOLO26" | "YOLO12" | "YOLO11" | "YOLOv10" | "YOLOv9" | "YOLOv8";
+type TrainingModelGroups = Array<{
+  group: TrainingModelGroup;
+  options: Array<{
+    value: string;
+    label: string;
+    config: Partial<TrainingConfigState>;
+  }>;
+}>;
 type TrainingNumberConfigKey =
   | "epochs"
   | "batch"
@@ -134,14 +143,7 @@ function trainingModelOption(value: string, size: string, label: string) {
   };
 }
 
-const trainingModelGroups: Array<{
-  group: TrainingModelGroup;
-  options: Array<{
-    value: string;
-    label: string;
-    config: Partial<TrainingConfigState>;
-  }>;
-}> = [
+const trainingModelGroups: TrainingModelGroups = [
   {
     group: "YOLO26",
     options: [
@@ -205,7 +207,38 @@ const trainingModelGroups: Array<{
   },
 ];
 
-const trainingModelOptions = trainingModelGroups.flatMap((group) => group.options);
+export const classificationTrainingModelGroups: TrainingModelGroups = [
+  {
+    group: "YOLO26",
+    options: [
+      trainingModelOption("yolo26n-cls", "n", "nano"),
+      trainingModelOption("yolo26s-cls", "s", "small"),
+      trainingModelOption("yolo26m-cls", "m", "medium"),
+      trainingModelOption("yolo26l-cls", "l", "large"),
+      trainingModelOption("yolo26x-cls", "x", "xlarge"),
+    ],
+  },
+  {
+    group: "YOLO11",
+    options: [
+      trainingModelOption("yolo11n-cls", "n", "nano"),
+      trainingModelOption("yolo11s-cls", "s", "small"),
+      trainingModelOption("yolo11m-cls", "m", "medium"),
+      trainingModelOption("yolo11l-cls", "l", "large"),
+      trainingModelOption("yolo11x-cls", "x", "xlarge"),
+    ],
+  },
+  {
+    group: "YOLOv8",
+    options: [
+      trainingModelOption("yolov8n-cls", "n", "nano"),
+      trainingModelOption("yolov8s-cls", "s", "small"),
+      trainingModelOption("yolov8m-cls", "m", "medium"),
+      trainingModelOption("yolov8l-cls", "l", "large"),
+      trainingModelOption("yolov8x-cls", "x", "xlarge"),
+    ],
+  },
+];
 
 const trainingPresetOptions: Array<{
   key: TrainingPresetKey;
@@ -711,6 +744,16 @@ export function ProjectDetailPage({
   const trainingCommandPreview = preflightResult?.command_preview;
   const canStartAfterCommandPreview = Boolean(preflightResult?.can_start && trainingCommandPreview);
 
+  const projectQuery = useQuery({
+    queryFn: () => apiGet<Project>(`/api/projects/${projectId}`),
+    queryKey: ["projects", projectId],
+  });
+  const isClassificationProject = projectQuery.data?.task_type === "classification";
+  const activeTrainingModelGroups = isClassificationProject
+    ? classificationTrainingModelGroups
+    : trainingModelGroups;
+  const activeTrainingModelOptions = activeTrainingModelGroups.flatMap((group) => group.options);
+
   const datasetsQuery = useQuery({
     queryFn: () => apiGet<Dataset[]>(`/api/projects/${projectId}/datasets`),
     queryKey: ["projects", projectId, "datasets"],
@@ -1038,6 +1081,12 @@ export function ProjectDetailPage({
     if (!focusedInferenceRunId) return;
     setExpandedInferenceRunId(focusedInferenceRunId);
   }, [focusedInferenceRunId]);
+
+  useEffect(() => {
+    if (!isClassificationProject || trainingModelName.endsWith("-cls")) return;
+    clearTrainingCommandPreview();
+    setTrainingModelName("yolo26s-cls");
+  }, [isClassificationProject, trainingModelName]);
 
   useEffect(() => {
     if (!selectedPredictionImage) return undefined;
@@ -1422,7 +1471,7 @@ export function ProjectDetailPage({
   }
 
   function applyTrainingModel(modelName: string) {
-    const modelOption = trainingModelOptions.find((option) => option.value === modelName);
+    const modelOption = activeTrainingModelOptions.find((option) => option.value === modelName);
     clearTrainingCommandPreview();
     setTrainingModelName(modelName);
     if (!modelOption) return;
@@ -2339,7 +2388,7 @@ export function ProjectDetailPage({
                   }}
                   value={trainingModelName}
                 >
-                  {trainingModelGroups.map((group) => (
+                  {activeTrainingModelGroups.map((group) => (
                     <optgroup key={group.group} label={group.group}>
                       {group.options.map((model) => (
                         <option key={model.value} value={model.value}>

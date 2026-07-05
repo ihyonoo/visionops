@@ -6,7 +6,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectsPage } from "../src/pages/ProjectsPage";
-import { ProjectDetailPage } from "../src/pages/ProjectDetailPage";
+import {
+  classificationTrainingModelGroups,
+  ProjectDetailPage,
+} from "../src/pages/ProjectDetailPage";
 import { StatusBadge } from "../src/components/StatusBadge";
 import { LogViewer } from "../src/components/LogViewer";
 import { TrainingRunPage } from "../src/pages/TrainingRunPage";
@@ -16,6 +19,7 @@ import { TrainingQueueWidget } from "../src/components/TrainingQueueWidget";
 import { LanguageProvider, useLanguage } from "../src/i18n/LanguageProvider";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import App from "../src/App";
+import type { Project } from "../src/api/types";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -170,7 +174,7 @@ describe("ProjectsPage", () => {
               description: "라인 결함 탐지",
               id: "project-1",
               name: "검수 라인 A",
-              task_type: "detection",
+              task_type: "classification",
               updated_at: "2026-07-02T00:00:00Z",
             },
           ]),
@@ -189,6 +193,7 @@ describe("ProjectsPage", () => {
 
     await waitForAssertion(() => {
       expect(container.textContent).toContain("검수 라인 A");
+      expect(container.textContent).toContain("이미지 분류");
     });
     expect(container.textContent).not.toContain("2개 프로젝트");
     expect(container.textContent).not.toContain("작업 유형");
@@ -266,17 +271,18 @@ describe("ProjectsPage", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/projects") && init?.method === "POST") {
-        expect(JSON.parse(String(init.body))).toEqual({
+        expect(JSON.parse(String(init.body))).toEqual(expect.objectContaining({
           description: "라인 결함 탐지",
           name: "검수 라인 A",
-        });
+          task_type: "classification",
+        }));
         return new Response(
           JSON.stringify({
             created_at: "2026-07-01T00:00:00Z",
             description: "라인 결함 탐지",
             id: "project-new",
             name: "검수 라인 A",
-            task_type: "detection",
+            task_type: "classification",
             updated_at: "2026-07-01T00:00:00Z",
           }),
           { headers: { "Content-Type": "application/json" }, status: 201 },
@@ -320,6 +326,7 @@ describe("ProjectsPage", () => {
     act(() => {
       setInputValue(nameInput, "검수 라인 A");
       setTextareaValue(descriptionInput, "라인 결함 탐지");
+      setSelectValue(dialog?.querySelector<HTMLSelectElement>("[aria-label='작업 유형']")!, "classification");
     });
     await act(async () => {
       if (form) Simulate.submit(form);
@@ -341,6 +348,7 @@ describe("ProjectsPage", () => {
         expect(JSON.parse(String(init.body))).toEqual({
           description: "수정된 설명",
           name: "수정된 프로젝트",
+          task_type: "detection",
         });
         return new Response(
           JSON.stringify({
@@ -487,7 +495,7 @@ describe("Layout", () => {
     const onToggleProjectHidden = vi.fn();
     const onProjectSortChange = vi.fn();
     const onCreateProject = vi.fn();
-    const projects = [
+    const projects: Project[] = [
       {
         created_at: "2026-07-01T00:00:00Z",
         description: "B",
@@ -609,7 +617,7 @@ describe("Layout", () => {
       removeItem: (key: string) => storage.delete(key),
       setItem: (key: string, value: string) => storage.set(key, value),
     });
-    const projects = [
+    const projects: Project[] = [
       {
         created_at: "2026-07-01T00:00:00Z",
         description: "",
@@ -3616,6 +3624,147 @@ describe("ProjectDetailPage", () => {
 
     await waitForAssertion(() => {
       expect(container.textContent).toContain("model=yolo26x.pt");
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("uses classification model presets for classification projects", async () => {
+    expect(classificationTrainingModelGroups.map((group) => group.group)).toEqual([
+      "YOLO26",
+      "YOLO11",
+      "YOLOv8",
+    ]);
+    expect(classificationTrainingModelGroups.flatMap((group) => group.options.map((option) => option.value))).toEqual([
+      "yolo26n-cls",
+      "yolo26s-cls",
+      "yolo26m-cls",
+      "yolo26l-cls",
+      "yolo26x-cls",
+      "yolo11n-cls",
+      "yolo11s-cls",
+      "yolo11m-cls",
+      "yolo11l-cls",
+      "yolo11x-cls",
+      "yolov8n-cls",
+      "yolov8s-cls",
+      "yolov8m-cls",
+      "yolov8l-cls",
+      "yolov8x-cls",
+    ]);
+
+    const dataset = {
+      class_names: ["scratch"],
+      created_at: "2026-07-02T00:00:00Z",
+      format: "folder",
+      id: "dataset-1",
+      image_count: 120,
+      label_count: 120,
+      name: "라인 A 데이터셋",
+      project_id: "project-1",
+      source_path: "/data/project-1",
+      validation_status: "valid",
+      validation_summary: { errors: [], warnings: [] },
+    };
+    const split = {
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      dataset_yaml_path: "/tmp/data.yaml",
+      id: "split-1",
+      name: "기본 split",
+      seed: 42,
+      split_path: "/tmp/split",
+      train_count: 96,
+      train_ratio: 0.8,
+      test_count: 0,
+      test_ratio: 0,
+      val_count: 24,
+      val_ratio: 0.2,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/projects/project-1")) {
+          return new Response(
+            JSON.stringify({
+              created_at: "2026-07-01T00:00:00Z",
+              description: "",
+              id: "project-1",
+              name: "분류 프로젝트",
+              task_type: "classification",
+              updated_at: "2026-07-02T00:00:00Z",
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/datasets")) {
+          return new Response(JSON.stringify([dataset]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets/dataset-1")) {
+          return new Response(JSON.stringify(dataset), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets/dataset-1/splits")) {
+          return new Response(JSON.stringify([split]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="training" onTabChange={vi.fn()} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("라인 A 데이터셋 / 기본 split");
+    });
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".training-split-option"))
+        .find((button) => button.textContent?.includes("기본 split"))
+        ?.click();
+    });
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("새 학습 실행"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      const modelSelect = container.querySelector<HTMLSelectElement>("[aria-label='모델 선택']");
+      expect(modelSelect?.value).toBe("yolo26s-cls");
+      expect(Array.from(modelSelect?.options ?? []).map((option) => option.value)).toEqual([
+        "yolo26n-cls",
+        "yolo26s-cls",
+        "yolo26m-cls",
+        "yolo26l-cls",
+        "yolo26x-cls",
+        "yolo11n-cls",
+        "yolo11s-cls",
+        "yolo11m-cls",
+        "yolo11l-cls",
+        "yolo11x-cls",
+        "yolov8n-cls",
+        "yolov8s-cls",
+        "yolov8m-cls",
+        "yolov8l-cls",
+        "yolov8x-cls",
+      ]);
     });
 
     act(() => root.unmount());

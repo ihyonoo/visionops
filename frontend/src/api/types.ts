@@ -35,12 +35,14 @@ export type NotificationTestResult = {
   message: string;
 };
 
+export type ProjectTaskType = "detection" | "classification";
+
 export type Project = {
   id: string;
   name: string;
   slug?: string;
   description: string;
-  task_type: "detection" | string;
+  task_type: ProjectTaskType;
   created_at: Timestamp;
   updated_at: Timestamp;
 };
@@ -48,11 +50,13 @@ export type Project = {
 export type ProjectCreate = {
   name: string;
   description?: string;
+  task_type: ProjectTaskType;
 };
 
 export type ProjectUpdate = {
   name?: string;
   description?: string;
+  task_type?: ProjectTaskType;
 };
 
 export type Dataset = {
