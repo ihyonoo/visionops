@@ -63,6 +63,11 @@ function replaceCachedSetting(
   );
 }
 
+function apiErrorDetail(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  return error.message.replace(/^API request failed \(\d+\):\s*/u, "");
+}
+
 type NotificationChannelCardProps = {
   setting: NotificationSetting;
   title: string;
@@ -281,6 +286,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
         {saveSetting.isError ? (
           <div className="notice notice--danger" role="alert">
             {t("notificationSettings.saveError")}
+            {apiErrorDetail(saveSetting.error) ? <small>{apiErrorDetail(saveSetting.error)}</small> : null}
           </div>
         ) : null}
         {saveBeforeTestVisible ? (

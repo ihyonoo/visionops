@@ -95,11 +95,17 @@ def _validate_webhook_url(channel: str, webhook_url: str) -> None:
     if channel == "slack":
         valid = (
             parsed.scheme == "https"
-            and hostname == "hooks.slack.com"
-            and parsed.path.startswith("/services/")
+            and hostname in {"hooks.slack.com", "hooks.slack-gov.com"}
+            and (
+                parsed.path.startswith("/services/")
+                or parsed.path.startswith("/triggers/")
+            )
         )
         if not valid:
-            raise ValueError("Slack webhook URL must be an HTTPS hooks.slack.com /services/ URL.")
+            raise ValueError(
+                "Slack webhook URL must be an HTTPS hooks.slack.com or "
+                "hooks.slack-gov.com /services/ or /triggers/ URL."
+            )
     elif channel == "discord":
         valid = (
             parsed.scheme == "https"

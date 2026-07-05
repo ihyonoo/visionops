@@ -233,6 +233,15 @@ class NotificationTestRead(BaseModel):
     message: str
 
 
+class LocalPathOpenRequest(BaseModel):
+    path: NonEmptyString
+
+
+class LocalPathOpenRead(BaseModel):
+    requested_path: str
+    opened_path: str
+
+
 class ModelArtifactRead(BaseModel):
     id: str
     training_run_id: str

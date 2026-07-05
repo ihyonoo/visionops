@@ -225,6 +225,58 @@ describe("NotificationSettingsPage", () => {
     });
   });
 
+  it("shows backend validation detail when Slack webhook save fails", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/notification-settings") && (!init?.method || init.method === "GET")) {
+        return new Response(JSON.stringify(defaultSettings), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/notification-settings/slack") && init?.method === "PUT") {
+        return new Response(
+          JSON.stringify({
+            detail: "Slack webhook URL must be an HTTPS hooks.slack.com /services/ URL.",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 400 },
+        );
+      }
+      return new Response(JSON.stringify({ detail: "not found" }), {
+        headers: { "Content-Type": "application/json" },
+        status: 404,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Slack");
+    });
+
+    const slackEnabled = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Slack 활성화"]',
+    );
+    const slackWebhook = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Slack Webhook URL"]',
+    );
+    await act(async () => {
+      slackEnabled?.click();
+    });
+    await act(async () => {
+      if (slackWebhook) setInputValue(slackWebhook, "https://hooks.slack.com/triggers/T1/B2/C3");
+    });
+    await act(async () => {
+      findButton(container, "저장")?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("알림 설정 저장에 실패했습니다.");
+      expect(container.textContent).toContain("Slack webhook URL must be an HTTPS hooks.slack.com");
+    });
+  });
+
   it("clears the saved Slack webhook field immediately after successful save", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);

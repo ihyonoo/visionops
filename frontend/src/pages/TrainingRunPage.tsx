@@ -6,6 +6,7 @@ import { apiGet, apiUrl } from "../api/client";
 import { ACTIVE_WORK_REFETCH_MS, isActiveWorkStatus, isTerminalWorkStatus } from "../api/realtime";
 import type { JsonObject, ModelArtifact, TrainingDownload, TrainingMetrics, TrainingRun } from "../api/types";
 import { LogViewer } from "../components/LogViewer";
+import { LocalPathActions } from "../components/LocalPathActions";
 import { MetricChart } from "../components/MetricChart";
 import { StatusBadge } from "../components/StatusBadge";
 import { useLanguage, type Language } from "../i18n/LanguageProvider";
@@ -345,13 +346,14 @@ export function TrainingRunPage({ initialRun, onBackToList, projectId, runId }: 
             </div>
           )}
         </div>
-        {downloadableLinks.length > 0 ? (
+        {downloadableLinks.length > 0 || run.artifact_path ? (
           <div className="training-detail__downloads" aria-label={t("training.download")}>
             {downloadableLinks.map((download) => (
               <a className="secondary-button" href={apiUrl(download.url)} key={download.url}>
                 {download.label}
               </a>
             ))}
+            <LocalPathActions path={run.artifact_path} t={t} />
           </div>
         ) : null}
       </div>

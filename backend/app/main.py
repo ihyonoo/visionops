@@ -1,7 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import datasets, inference, notification_settings, projects, runtime, splits, training
+from app.api.routes import (
+    datasets,
+    inference,
+    local_files,
+    notification_settings,
+    projects,
+    runtime,
+    splits,
+    training,
+)
 from app.core.config import settings
 from app.db import Base, engine, ensure_schema_compatibility
 
@@ -20,6 +29,7 @@ app.include_router(training.router)
 app.include_router(inference.router)
 app.include_router(runtime.router)
 app.include_router(notification_settings.router)
+app.include_router(local_files.router)
 
 
 @app.on_event("startup")

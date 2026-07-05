@@ -1764,6 +1764,12 @@ describe("ProjectDetailPage", () => {
   });
 
   it("toggles split controls from each dataset row", async () => {
+    const managedProjectRoot = "/tmp/vision_ops_data/projects/0123456789abcdef01234567";
+    const clipboardWriteText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWriteText },
+    });
     const dataset = {
       class_names: ["scratch"],
       created_at: "2026-07-02T00:00:00Z",
@@ -1773,18 +1779,18 @@ describe("ProjectDetailPage", () => {
       label_count: 10,
       name: "dataset",
       project_id: "project-1",
-      source_path: "/data/project-1",
+      source_path: `${managedProjectRoot}/datasets/dataset-1`,
       validation_status: "valid",
       validation_summary: { errors: [], warnings: [] },
     };
     const split = {
       created_at: "2026-07-02T00:00:00Z",
       dataset_id: "dataset-1",
-      dataset_yaml_path: "/tmp/data.yaml",
+      dataset_yaml_path: `${managedProjectRoot}/datasets/dataset-1/splits/split-1/data.yaml`,
       id: "split-1",
       name: "기본 split",
       seed: 42,
-      split_path: "/tmp/split",
+      split_path: `${managedProjectRoot}/datasets/dataset-1/splits/split-1`,
       train_count: 8,
       train_ratio: 0.8,
       test_count: 0,
@@ -1792,10 +1798,17 @@ describe("ProjectDetailPage", () => {
       val_count: 2,
       val_ratio: 0.2,
     };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        if (url.endsWith("/api/local-files/open") && init?.method === "POST") {
+          return new Response(
+            JSON.stringify({
+              opened_path: JSON.parse(String(init.body)).path,
+              requested_path: JSON.parse(String(init.body)).path,
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
         if (url.endsWith("/api/projects/project-1")) {
           return new Response(
             JSON.stringify({
@@ -1828,8 +1841,8 @@ describe("ProjectDetailPage", () => {
           });
         }
         return new Response("not found", { status: 404 });
-      }),
-    );
+      });
+    vi.stubGlobal("fetch", fetchMock);
 
     const onTabChange = vi.fn();
     const { container, root } = renderWithQuery(
@@ -1855,6 +1868,32 @@ describe("ProjectDetailPage", () => {
     expect(container.querySelectorAll(".split-form")).toHaveLength(0);
 
     act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset 데이터셋 작업']")?.click();
+    });
+    const datasetMenu = container.querySelector<HTMLElement>(".dataset-row__menu-popover");
+    expect(datasetMenu?.textContent).toContain("폴더 열기");
+    expect(datasetMenu?.textContent).toContain("경로 복사");
+    await act(async () => {
+      Array.from(datasetMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("경로 복사"))
+        ?.click();
+    });
+    expect(clipboardWriteText).toHaveBeenCalledWith(dataset.source_path);
+    await act(async () => {
+      Array.from(datasetMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("폴더 열기"))
+        ?.click();
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/api/local-files/open") &&
+          init?.method === "POST" &&
+          JSON.parse(String(init.body)).path === dataset.source_path,
+      ),
+    ).toBe(true);
+
+    act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
     });
 
@@ -1869,6 +1908,32 @@ describe("ProjectDetailPage", () => {
     expect(splitDetail?.querySelector("[aria-label='기본 split split 작업']")).not.toBeNull();
     expect(splitDetail?.querySelector(".split-row > svg")).toBeNull();
     expect(container.querySelectorAll(".split-form")).toHaveLength(0);
+
+    act(() => {
+      splitDetail?.querySelector<HTMLButtonElement>("[aria-label='기본 split split 작업']")?.click();
+    });
+    const splitMenu = splitDetail?.querySelector<HTMLElement>(".dataset-row__menu-popover");
+    expect(splitMenu?.textContent).toContain("폴더 열기");
+    expect(splitMenu?.textContent).toContain("경로 복사");
+    await act(async () => {
+      Array.from(splitMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("경로 복사"))
+        ?.click();
+    });
+    expect(clipboardWriteText).toHaveBeenCalledWith(split.split_path);
+    await act(async () => {
+      Array.from(splitMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("폴더 열기"))
+        ?.click();
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/api/local-files/open") &&
+          init?.method === "POST" &&
+          JSON.parse(String(init.body)).path === split.split_path,
+      ),
+    ).toBe(true);
 
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
@@ -3889,6 +3954,12 @@ describe("ProjectDetailPage", () => {
   });
 
   it("shows inference runs as thumbnails with toggle details and delete actions", async () => {
+    const managedProjectRoot = "/tmp/vision_ops_data/projects/0123456789abcdef01234567";
+    const clipboardWriteText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWriteText },
+    });
     const completedTrainingRun = {
       artifact_path: "/tmp/train/run-1",
       config: {},
@@ -3925,7 +3996,7 @@ describe("ProjectDetailPage", () => {
       input_type: "folder",
       model_artifact_id: artifact.id,
       name: "폴더 추론",
-      output_path: "/tmp/outputs/folder-run",
+      output_path: `${managedProjectRoot}/runs/inference/folder-run`,
       prediction_count: 1,
       project_id: "project-1",
       started_at: "2026-07-02T00:11:00Z",
@@ -3963,6 +4034,15 @@ describe("ProjectDetailPage", () => {
     let inferenceRuns = [folderRun, imageRun];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.endsWith("/api/local-files/open") && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            opened_path: JSON.parse(String(init.body)).path,
+            requested_path: JSON.parse(String(init.body)).path,
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
       if (url.endsWith("/api/projects/project-1")) {
         return new Response(
           JSON.stringify({
@@ -4040,6 +4120,41 @@ describe("ProjectDetailPage", () => {
     });
     expect(container.querySelector(".inference-run-row[data-selected='true']")).toBeNull();
 
+    const folderRunRow = Array.from(
+      container.querySelectorAll<HTMLElement>(".inference-run-row"),
+    ).find((row) => row.textContent?.includes("폴더 추론"));
+    expect(folderRunRow?.textContent).not.toContain("폴더 열기");
+    expect(folderRunRow?.textContent).not.toContain("경로 복사");
+    expect(folderRunRow?.querySelector("[aria-label='폴더 추론 추론 실행 작업']")).not.toBeNull();
+    act(() => {
+      folderRunRow
+        ?.querySelector<HTMLButtonElement>("[aria-label='폴더 추론 추론 실행 작업']")
+        ?.click();
+    });
+    const inferenceRunMenu = folderRunRow?.querySelector<HTMLElement>(".dataset-row__menu-popover");
+    expect(inferenceRunMenu?.textContent).toContain("폴더 열기");
+    expect(inferenceRunMenu?.textContent).toContain("경로 복사");
+    expect(inferenceRunMenu?.textContent).toContain("삭제");
+    await act(async () => {
+      Array.from(inferenceRunMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("경로 복사"))
+        ?.click();
+    });
+    expect(clipboardWriteText).toHaveBeenCalledWith(folderRun.output_path);
+    await act(async () => {
+      Array.from(inferenceRunMenu?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("폴더 열기"))
+        ?.click();
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/api/local-files/open") &&
+          init?.method === "POST" &&
+          JSON.parse(String(init.body)).path === folderRun.output_path,
+      ),
+    ).toBe(true);
+
     const folderRunSummary = Array.from(
       container.querySelectorAll<HTMLElement>(".inference-run-summary"),
     ).find((summary) => summary.textContent?.includes("폴더 추론"));
@@ -4061,8 +4176,16 @@ describe("ProjectDetailPage", () => {
       expect(container.querySelector(".prediction-grid--embedded img")).not.toBeNull();
     });
 
+    const imageRunRow = Array.from(
+      container.querySelectorAll<HTMLElement>(".inference-run-row"),
+    ).find((row) => row.textContent?.includes("단일 추론"));
     act(() => {
-      container.querySelector<HTMLButtonElement>("[aria-label='단일 추론 삭제']")?.click();
+      imageRunRow
+        ?.querySelector<HTMLButtonElement>("[aria-label='단일 추론 추론 실행 작업']")
+        ?.click();
+    });
+    act(() => {
+      imageRunRow?.querySelector<HTMLButtonElement>("[aria-label='단일 추론 삭제']")?.click();
     });
     await waitForAssertion(() => {
       expect(container.textContent).not.toContain("단일 추론");
@@ -4649,12 +4772,28 @@ describe("TrainingRunPage", () => {
   });
 
   it("prioritizes backend best metric summary cards before last epoch", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const managedProjectRoot = "/tmp/vision_ops_data/projects/0123456789abcdef01234567";
+    const artifactPath = `${managedProjectRoot}/runs/train/run-1`;
+    const clipboardWriteText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWriteText },
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        if (url.endsWith("/api/local-files/open") && init?.method === "POST") {
+          return new Response(
+            JSON.stringify({
+              opened_path: JSON.parse(String(init.body)).path,
+              requested_path: JSON.parse(String(init.body)).path,
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
         if (url.endsWith("/api/projects/project-1/training-runs/run-1")) {
           return new Response(
             JSON.stringify({
-              artifact_path: "/tmp/train/run-1",
+              artifact_path: artifactPath,
               config: {
                 batch: 16,
                 device: "cpu",
@@ -4796,6 +4935,12 @@ describe("TrainingRunPage", () => {
         container.querySelectorAll<HTMLAnchorElement>(".training-detail__downloads a"),
       ).map((link) => link.textContent);
       expect(downloadLabels).toEqual(["results.csv", "best.pt", "last.pt", "args.yaml"]);
+      expect(container.querySelector(".training-detail__downloads")?.textContent).toContain(
+        "폴더 열기",
+      );
+      expect(container.querySelector(".training-detail__downloads")?.textContent).toContain(
+        "경로 복사",
+      );
       expect(
         container.querySelector<HTMLImageElement>("img[src$='/downloads/results.png']"),
       ).not.toBeNull();
@@ -4823,6 +4968,26 @@ describe("TrainingRunPage", () => {
         container.textContent?.indexOf("results.csv") ?? -1,
       );
     });
+    const downloadActions = container.querySelector<HTMLElement>(".training-detail__downloads");
+    await act(async () => {
+      Array.from(downloadActions?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("경로 복사"))
+        ?.click();
+    });
+    expect(clipboardWriteText).toHaveBeenCalledWith(artifactPath);
+    await act(async () => {
+      Array.from(downloadActions?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("폴더 열기"))
+        ?.click();
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/api/local-files/open") &&
+          init?.method === "POST" &&
+          JSON.parse(String(init.body)).path === artifactPath,
+      ),
+    ).toBe(true);
     await waitForAssertion(() => {
       expect(
         fetchMock.mock.calls.some(([url]) => String(url).includes("/logs?tail=200")),

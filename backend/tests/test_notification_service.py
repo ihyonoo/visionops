@@ -108,6 +108,20 @@ def test_validate_channel_payload_accepts_provider_webhooks():
             webhook_url="https://hooks.slack.com/services/T000/B000/SECRET",
         ),
     )
+    gov_slack_config = validate_channel_payload(
+        "slack",
+        NotificationSettingUpdate(
+            enabled=True,
+            webhook_url="https://hooks.slack-gov.com/services/T000/B000/SECRET",
+        ),
+    )
+    slack_workflow_config = validate_channel_payload(
+        "slack",
+        NotificationSettingUpdate(
+            enabled=True,
+            webhook_url="https://hooks.slack.com/triggers/T000/B000/SECRET",
+        ),
+    )
     discord_config = validate_channel_payload(
         "discord",
         NotificationSettingUpdate(
@@ -124,6 +138,8 @@ def test_validate_channel_payload_accepts_provider_webhooks():
     )
 
     assert slack_config["webhook_url"].startswith("https://hooks.slack.com/services/")
+    assert gov_slack_config["webhook_url"].startswith("https://hooks.slack-gov.com/services/")
+    assert slack_workflow_config["webhook_url"].startswith("https://hooks.slack.com/triggers/")
     assert discord_config["webhook_url"].startswith("https://discord.com/api/webhooks/")
     assert legacy_discord_config["webhook_url"].startswith(
         "https://discordapp.com/api/webhooks/"

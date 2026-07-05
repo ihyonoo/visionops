@@ -31,8 +31,10 @@ import {
   workRunsQueryRefetchInterval,
 } from "../api/realtime";
 import { LogViewer } from "../components/LogViewer";
+import { LocalPathActions } from "../components/LocalPathActions";
 import { StatusBadge } from "../components/StatusBadge";
 import { useLanguage, type Language, type TranslationFunction } from "../i18n/LanguageProvider";
+import { isManagedVisionOpsPath } from "../utils/localPaths";
 import { TrainingRunPage } from "./TrainingRunPage";
 import type {
   Dataset,
@@ -489,11 +491,6 @@ function shortInternalId(value: string): string {
   return isLongInternalId(value) ? `#${value.slice(0, 8)}` : value;
 }
 
-function isManagedVisionOpsPath(path: string): boolean {
-  const normalizedPath = path.replace(/\\/gu, "/");
-  return /(?:^|\/)vision_ops_data\/projects\/[a-f0-9]{24,}(?:\/|$)/iu.test(normalizedPath);
-}
-
 function artifactOptionLabel(option: ArtifactOption): string {
   return `${option.run.name} / ${option.artifact.kind}`;
 }
@@ -686,6 +683,7 @@ export function ProjectDetailPage({
   const [inferenceDialogOpen, setInferenceDialogOpen] = useState(false);
   const [inferenceArtifactId, setInferenceArtifactId] = useState("");
   const [expandedInferenceRunId, setExpandedInferenceRunId] = useState<string | null>(null);
+  const [inferenceRunMenuId, setInferenceRunMenuId] = useState<string | null>(null);
   const [selectedPredictionImage, setSelectedPredictionImage] = useState<{
     label: string;
     src: string;
@@ -1553,6 +1551,7 @@ export function ProjectDetailPage({
                                 <Pencil aria-hidden="true" size={15} />
                                 <span>{t("projects.rename")}</span>
                               </button>
+                              <LocalPathActions path={dataset.source_path} t={t} variant="menu" />
                               <button onClick={() => openDatasetDeleteDialog(dataset)} type="button">
                                 <Trash2 aria-hidden="true" size={15} />
                                 <span>{t("projects.delete")}</span>
@@ -1648,6 +1647,7 @@ export function ProjectDetailPage({
                                         <Pencil aria-hidden="true" size={15} />
                                         <span>{t("projects.rename")}</span>
                                       </button>
+                                      <LocalPathActions path={split.split_path} t={t} variant="menu" />
                                       <button onClick={() => openSplitDeleteDialog(split)} type="button">
                                         <Trash2 aria-hidden="true" size={15} />
                                         <span>{t("projects.delete")}</span>
@@ -2850,15 +2850,38 @@ export function ProjectDetailPage({
                           )}
                           <span>{t(isExpanded ? "inference.collapse" : "inference.details")}</span>
                         </button>
-                        <button
-                          aria-label={t("inference.deleteRun", { name: run.name })}
-                          className="icon-button"
-                          disabled={deleteInferenceRun.isPending}
-                          onClick={() => deleteInferenceRun.mutate(run)}
-                          type="button"
-                        >
-                          <Trash2 aria-hidden="true" size={16} />
-                        </button>
+                        <span className="inference-run-menu">
+                          <button
+                            aria-expanded={inferenceRunMenuId === run.id}
+                            aria-label={t("inference.actions", { name: run.name })}
+                            className="dataset-row__menu-button"
+                            onClick={() =>
+                              setInferenceRunMenuId((currentId) =>
+                                currentId === run.id ? null : run.id,
+                              )
+                            }
+                            type="button"
+                          >
+                            <MoreVertical aria-hidden="true" size={18} />
+                          </button>
+                          {inferenceRunMenuId === run.id ? (
+                            <span className="dataset-row__menu-popover">
+                              <LocalPathActions path={run.output_path} t={t} variant="menu" />
+                              <button
+                                aria-label={t("inference.deleteRun", { name: run.name })}
+                                disabled={deleteInferenceRun.isPending}
+                                onClick={() => {
+                                  setInferenceRunMenuId(null);
+                                  deleteInferenceRun.mutate(run);
+                                }}
+                                type="button"
+                              >
+                                <Trash2 aria-hidden="true" size={15} />
+                                <span>{t("projects.delete")}</span>
+                              </button>
+                            </span>
+                          ) : null}
+                        </span>
                       </div>
                       {isExpanded ? (
                         <div className="inference-run-details">
