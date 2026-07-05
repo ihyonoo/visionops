@@ -4056,7 +4056,9 @@ describe("ProjectDetailPage", () => {
         ?.click();
     });
     await waitForAssertion(() => {
-      expect(container.textContent).toContain("scratch");
+      expect(container.textContent).not.toContain("추론 결과");
+      expect(container.textContent).not.toContain("scratch");
+      expect(container.querySelector(".prediction-grid--embedded img")).not.toBeNull();
     });
 
     act(() => {
@@ -4207,16 +4209,35 @@ describe("ProjectDetailPage", () => {
     });
 
     await waitForAssertion(() => {
-      expect(container.textContent).toContain("추론 결과");
-      expect(container.textContent).toContain("part.jpg");
-      expect(container.textContent).toContain("scratch");
-      expect(container.textContent).toContain("0.91");
+      expect(container.textContent).not.toContain("추론 결과");
+      expect(container.textContent).not.toContain("part.jpg");
+      expect(container.textContent).not.toContain("scratch");
+      expect(container.textContent).not.toContain("0.91");
       expect(
         container.querySelector<HTMLImageElement>(
           "img[src*='/api/projects/project-1/inference-runs/inference-1/predictions/prediction-1/image?v=']",
         ),
       ).not.toBeNull();
+      expect(container.querySelector(".training-image-modal")).toBeNull();
     });
+
+    const predictionImageButton = container.querySelector<HTMLButtonElement>(
+      ".prediction-card__image-button",
+    );
+    expect(predictionImageButton).not.toBeNull();
+    act(() => {
+      Simulate.click(predictionImageButton as HTMLButtonElement);
+    });
+    expect(container.querySelector(".training-image-modal")).not.toBeNull();
+    expect(
+      container.querySelector<HTMLImageElement>(
+        ".training-image-modal img[src*='/api/projects/project-1/inference-runs/inference-1/predictions/prediction-1/image?v=']",
+      ),
+    ).not.toBeNull();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(container.querySelector(".training-image-modal")).toBeNull();
 
     act(() => root.unmount());
     container.remove();
@@ -4347,7 +4368,7 @@ describe("ProjectDetailPage", () => {
 
     await waitForAssertion(() => {
       expect(container.textContent).toContain("결과 이미지 없음");
-      expect(container.textContent).toContain("part.jpg");
+      expect(container.textContent).not.toContain("part.jpg");
       expect(
         container.querySelector<HTMLImageElement>(
           "img[src$='/api/projects/project-1/inference-runs/inference-1/predictions/prediction-1/image']",

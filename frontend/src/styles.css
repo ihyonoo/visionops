@@ -3285,7 +3285,8 @@ button {
 }
 
 .prediction-grid--embedded {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(132px, 180px));
+  justify-content: start;
 }
 
 .prediction-card {
@@ -3296,12 +3297,28 @@ button {
   background: var(--surface);
 }
 
+.prediction-card__image-button {
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: zoom-in;
+}
+
+.prediction-card__image-button:hover img,
+.prediction-card__image-button:focus-visible img {
+  transform: scale(1.015);
+}
+
 .prediction-card img {
   width: 100%;
   aspect-ratio: 4 / 3;
   display: block;
   background: var(--surface-subtle);
   object-fit: contain;
+  transition: transform 140ms ease;
 }
 
 .prediction-card__missing {

@@ -41,7 +41,6 @@ import type {
   DatasetSplitUpdate,
   InferencePrediction,
   InferenceRun,
-  JsonObject,
   ModelArtifact,
   RuntimeCheck,
   TrainingRun,
@@ -499,13 +498,6 @@ function artifactOptionLabel(option: ArtifactOption): string {
   return `${option.run.name} / ${option.artifact.kind}`;
 }
 
-function predictionDetections(prediction: InferencePrediction): JsonObject[] {
-  const detections = prediction.prediction_json.detections;
-  return Array.isArray(detections)
-    ? detections.filter((detection): detection is JsonObject => Boolean(detection && typeof detection === "object"))
-    : [];
-}
-
 function predictionImageUrl(
   projectId: string,
   runId: string,
@@ -515,12 +507,6 @@ function predictionImageUrl(
   return apiUrl(
     `/api/projects/${projectId}/inference-runs/${runId}/predictions/${prediction.id}/image?v=${cacheKey}`,
   );
-}
-
-function detectionLabel(detection: JsonObject): string {
-  const className = String(detection.class_name ?? detection.class_id ?? "object");
-  const confidence = typeof detection.confidence === "number" ? detection.confidence.toFixed(2) : null;
-  return confidence ? `${className} ${confidence}` : className;
 }
 
 function formatCount(value: number | null | undefined, language: Language): string {
@@ -700,6 +686,10 @@ export function ProjectDetailPage({
   const [inferenceDialogOpen, setInferenceDialogOpen] = useState(false);
   const [inferenceArtifactId, setInferenceArtifactId] = useState("");
   const [expandedInferenceRunId, setExpandedInferenceRunId] = useState<string | null>(null);
+  const [selectedPredictionImage, setSelectedPredictionImage] = useState<{
+    label: string;
+    src: string;
+  } | null>(null);
   const [inferenceInputType, setInferenceInputType] = useState<"image" | "folder">("folder");
   const [inferenceFiles, setInferenceFiles] = useState<File[]>([]);
   const [inferenceConfig, setInferenceConfig] = useState(defaultInferenceConfig);
@@ -1050,6 +1040,19 @@ export function ProjectDetailPage({
     if (!focusedInferenceRunId) return;
     setExpandedInferenceRunId(focusedInferenceRunId);
   }, [focusedInferenceRunId]);
+
+  useEffect(() => {
+    if (!selectedPredictionImage) return undefined;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSelectedPredictionImage(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedPredictionImage]);
 
   const createTrainingRun = useMutation({
     mutationFn: (body: TrainingRunCreate) =>
@@ -2859,14 +2862,9 @@ export function ProjectDetailPage({
                       </div>
                       {isExpanded ? (
                         <div className="inference-run-details">
-                          <div className="panel__header panel__header--compact">
-                            <div>
-                              <h2>{t("inference.results")}</h2>
-                            </div>
-                            {predictionQuery?.isFetching ? (
-                              <Loader2 aria-hidden="true" className="spin" size={18} />
-                            ) : null}
-                          </div>
+                          {predictionQuery?.isFetching ? (
+                            <Loader2 aria-hidden="true" className="spin" size={18} />
+                          ) : null}
 
                           {run.status !== "completed" ? (
                             <div className="empty-state empty-state--compact">
@@ -2876,41 +2874,36 @@ export function ProjectDetailPage({
                           ) : predictions.length > 0 ? (
                             <div className="prediction-grid prediction-grid--embedded">
                               {predictions.map((prediction) => {
-                                const detections = predictionDetections(prediction);
                                 const hasRenderedImage = Boolean(prediction.output_image_path);
+                                const imageLabel = fileName(prediction.image_path);
+                                const imageSrc = predictionImageUrl(projectId, run.id, prediction);
                                 return (
                                   <article className="prediction-card" key={prediction.id}>
                                     {hasRenderedImage ? (
-                                      <img
-                                        alt={t("inference.resultAlt", {
-                                          name: fileName(prediction.image_path),
-                                        })}
-                                        src={predictionImageUrl(projectId, run.id, prediction)}
-                                      />
+                                      <button
+                                        aria-label={`${imageLabel} ${t("training.openReportImage")}`}
+                                        className="prediction-card__image-button"
+                                        onClick={() =>
+                                          setSelectedPredictionImage({
+                                            label: imageLabel,
+                                            src: imageSrc,
+                                          })
+                                        }
+                                        type="button"
+                                      >
+                                        <img
+                                          alt={t("inference.resultAlt", {
+                                            name: imageLabel,
+                                          })}
+                                          src={imageSrc}
+                                        />
+                                      </button>
                                     ) : (
                                       <div className="prediction-card__missing">
                                         <p>{t("inference.noResultImage")}</p>
                                         <small>{t("inference.noResultImageHelp")}</small>
                                       </div>
                                     )}
-                                    <div className="prediction-card__body">
-                                      <strong>{fileName(prediction.image_path)}</strong>
-                                      <span>
-                                        {t("inference.objectCount", {
-                                          count: detections.length,
-                                          confidence: prediction.max_confidence.toFixed(2),
-                                        })}
-                                      </span>
-                                      {detections.length > 0 ? (
-                                        <div className="prediction-tags">
-                                          {detections.slice(0, 6).map((detection, detectionIndex) => (
-                                            <em key={`${prediction.id}-${detectionIndex}`}>
-                                              {detectionLabel(detection)}
-                                            </em>
-                                          ))}
-                                        </div>
-                                      ) : null}
-                                    </div>
                                   </article>
                                 );
                               })}
@@ -2941,6 +2934,35 @@ export function ProjectDetailPage({
               </div>
             ) : null}
           </div>
+
+          {selectedPredictionImage ? (
+            <div
+              className="modal-backdrop training-image-modal-backdrop"
+              onClick={() => setSelectedPredictionImage(null)}
+              role="presentation"
+            >
+              <div
+                aria-labelledby="inference-prediction-image-title"
+                aria-modal="true"
+                className="training-image-modal"
+                onClick={(event) => event.stopPropagation()}
+                role="dialog"
+              >
+                <div className="training-image-modal__header">
+                  <h2 id="inference-prediction-image-title">{selectedPredictionImage.label}</h2>
+                  <button
+                    aria-label={t("common.close")}
+                    className="icon-button"
+                    onClick={() => setSelectedPredictionImage(null)}
+                    type="button"
+                  >
+                    <X aria-hidden="true" size={18} />
+                  </button>
+                </div>
+                <img alt={selectedPredictionImage.label} src={selectedPredictionImage.src} />
+              </div>
+            </div>
+          ) : null}
 
           {inferenceDialogOpen ? (
             <div className="modal-backdrop" role="presentation">
