@@ -27,7 +27,8 @@ export type GlobalSection =
   | "datasets"
   | "training"
   | "training-management"
-  | "inference";
+  | "inference"
+  | "settings-notifications";
 
 export type ProjectSort = "updated_desc" | "name_asc";
 
@@ -49,6 +50,7 @@ type LayoutProps = {
   onCreateProject?: () => void;
   onNotificationDismiss?: (notificationId: string) => void;
   onNotificationOpen?: (notification: AppNotification) => void;
+  onOpenNotificationSettings?: () => void;
   onProjectSortChange?: (sort: ProjectSort) => void;
   onSelectProject?: (projectId: string) => void;
   onToggleProjectHidden?: (projectId: string) => void;
@@ -317,6 +319,7 @@ export function Layout({
   onCreateProject = () => undefined,
   onNotificationDismiss = () => undefined,
   onNotificationOpen = () => undefined,
+  onOpenNotificationSettings = () => undefined,
   onProjectSortChange = () => undefined,
   onSelectProject = () => undefined,
   onToggleProjectHidden = () => undefined,
@@ -333,7 +336,8 @@ export function Layout({
   const [projectSidebarCollapsed, setProjectSidebarCollapsed] = useState(storedSidebarCollapsed);
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
   const { t } = useLanguage();
-  const showProjectSidebar = activeSection !== "projects";
+  const showProjectSidebar =
+    activeSection !== "projects" && activeSection !== "settings-notifications";
 
   useEffect(() => {
     window.localStorage?.setItem?.(SIDEBAR_WIDTH_KEY, String(projectSidebarWidth));
@@ -529,6 +533,24 @@ export function Layout({
                       <span>{t("settings.language")}</span>
                     </div>
                     <LanguageControl />
+                  </div>
+                  <div className="settings-panel__section">
+                    <div className="settings-panel__header">
+                      <span>{t("notificationSettings.nav")}</span>
+                    </div>
+                    <button
+                      className="settings-panel__action"
+                      data-active={activeSection === "settings-notifications" ? "true" : undefined}
+                      onClick={() => {
+                        setSettingsOpen(false);
+                        setHeaderNotice(null);
+                        onOpenNotificationSettings();
+                      }}
+                      type="button"
+                    >
+                      <Bell aria-hidden="true" size={17} />
+                      <span>{t("notificationSettings.nav")}</span>
+                    </button>
                   </div>
                 </div>
               ) : null}

@@ -141,4 +141,24 @@ describe("styles source", () => {
     expect(styles).toMatch(/\.split-row\s*\{[^}]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+auto\s+auto/u);
     expect(styles).not.toMatch(/\.dataset-row-detail\s+\.split-row > svg/u);
   });
+
+  it("keeps notification settings page styles available", () => {
+    const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+    const source = readFileSync(
+      resolve(process.cwd(), "src/pages/NotificationSettingsPage.tsx"),
+      "utf8",
+    );
+
+    expect(styles).toContain(".settings-page");
+    expect(styles).toContain(".settings-page__header");
+    expect(styles).toContain(".notification-settings-grid");
+    expect(styles).toContain(".notification-card");
+    expect(source).toContain('className="settings-page"');
+    expect(source).toContain('className="settings-page__header"');
+    expect(source).toContain('className="notification-settings-grid"');
+    expect(source).toContain('className="notification-card"');
+    expect(source).not.toContain('className="panel panel--wide"');
+    expect(source).not.toContain('className="project-card-grid"');
+    expect(source).not.toContain('className="panel notification');
+  });
 });

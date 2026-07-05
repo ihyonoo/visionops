@@ -10,6 +10,7 @@ import { LanguageProvider, useLanguage } from "./i18n/LanguageProvider";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
 import type { Project, ProjectCreate } from "./api/types";
 import type { DetailTab } from "./pages/ProjectDetailPage";
+import { NotificationSettingsPage } from "./pages/NotificationSettingsPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { TrainingManagementPage } from "./pages/TrainingManagementPage";
 import { TrainingRunPage } from "./pages/TrainingRunPage";
@@ -28,11 +29,15 @@ const queryClient = new QueryClient({
 });
 
 type AppHistoryState =
-  | { projectId: null; section: "projects" | DetailTab | "training-management"; trainingRunId?: null }
+  | {
+      projectId: null;
+      section: "projects" | DetailTab | "training-management" | "settings-notifications";
+      trainingRunId?: null;
+    }
   | { projectId: string; section: DetailTab | "training-management"; trainingRunId?: string | null };
 
 type AppSection = AppHistoryState["section"];
-type ProjectScopedSection = Exclude<AppSection, "projects">;
+type ProjectScopedSection = Exclude<AppSection, "projects" | "settings-notifications">;
 
 const projectSortStorageKey = "visionops-project-sort";
 const hiddenProjectsStorageKey = "visionops-hidden-projects";
@@ -79,6 +84,7 @@ function appPath(
   projects: Project[] = [],
 ): string {
   if (section === "projects") return "/";
+  if (section === "settings-notifications") return "/settings/notifications";
   const projectSegment = projectId ? projectUrlSegment(projectId, projects) : null;
   if (projectId && section === "training-management" && trainingRunId) {
     return `/projects/${encodeURIComponent(projectSegment ?? projectId)}/${projectScopedPaths[section]}/${encodeURIComponent(
@@ -120,6 +126,9 @@ function projectUrlSegment(projectId: string, projects: Project[]): string {
 }
 
 function stateFromLocation(): AppHistoryState {
+  if (window.location.pathname === "/settings/notifications") {
+    return { projectId: null, section: "settings-notifications" };
+  }
   const match = window.location.pathname.match(/^\/projects\/([^/]+)(?:\/([^/]+)(?:\/([^/]+))?)?$/);
   if (match) {
     const section = sectionsByPath[match[2] ?? "datasets"] ?? "datasets";
@@ -144,8 +153,13 @@ function stateFromLocation(): AppHistoryState {
 
 function sectionTitleKey(section: AppSection): string {
   if (section === "projects") return "nav.projects";
+  if (section === "settings-notifications") return "notificationSettings.nav";
   if (section === "training-management") return "trainingManagement.nav";
   return `detail.${section}`;
+}
+
+function isProjectScopedSection(section: AppSection): section is ProjectScopedSection {
+  return section !== "projects" && section !== "settings-notifications";
 }
 
 function ProjectRequiredEmpty({
@@ -243,7 +257,9 @@ function AppContent() {
   const createSidebarProject = useMutation({
     mutationFn: (body: ProjectCreate) => apiPost<Project>("/api/projects", body),
     onSuccess: (project) => {
-      const nextSection: ProjectScopedSection = activeSection === "projects" ? "datasets" : activeSection;
+      const nextSection: ProjectScopedSection = isProjectScopedSection(activeSection)
+        ? activeSection
+        : "datasets";
       const nextState: AppHistoryState = {
         projectId: project.id,
         section: nextSection,
@@ -273,6 +289,7 @@ function AppContent() {
   useEffect(() => {
     if (!selectedProjectId || !selectedProjectApiId) return;
     if (activeSection === "projects") return;
+    if (activeSection === "settings-notifications") return;
     if (selectedProjectId !== selectedProjectApiId) {
       setSelectedProjectId(selectedProjectApiId);
     }
@@ -308,7 +325,9 @@ function AppContent() {
   }
 
   function handleSelectProjectInSidebar(projectId: string) {
-    const nextSection: ProjectScopedSection = activeSection === "projects" ? "datasets" : activeSection;
+    const nextSection: ProjectScopedSection = isProjectScopedSection(activeSection)
+      ? activeSection
+      : "datasets";
     const nextState: AppHistoryState = {
       projectId,
       section: nextSection,
@@ -328,6 +347,8 @@ function AppContent() {
     const nextState: AppHistoryState =
       section === "projects"
         ? { projectId: null, section: "projects" }
+        : section === "settings-notifications"
+          ? { projectId: null, section: "settings-notifications" }
         : currentProjectId
           ? { projectId: currentProjectId, section }
           : { projectId: null, section };
@@ -354,6 +375,14 @@ function AppContent() {
 
   function handleOpenProjects() {
     handleSectionChange("projects");
+  }
+
+  function openNotificationSettings() {
+    const nextState = { projectId: null, section: "settings-notifications" } satisfies AppHistoryState;
+    window.history.pushState(nextState, "", appPath(null, "settings-notifications"));
+    setSelectedProjectId(null);
+    setActiveSection("settings-notifications");
+    setFocusedTrainingRunId(null);
   }
 
   function handleOpenTrainingRun(projectId: string, runId: string) {
@@ -463,6 +492,8 @@ function AppContent() {
   const title =
     activeSection === "projects"
       ? t("nav.projects")
+      : activeSection === "settings-notifications"
+        ? t("notificationSettings.nav")
       : activeSection === "training-management"
         ? t("trainingManagement.nav")
       : selectedProjectQuery.data?.name ?? t(sectionTitleKey(activeSection));
@@ -476,6 +507,7 @@ function AppContent() {
       hiddenProjectIds={hiddenProjectIds}
       notifications={notifications}
       onCreateProject={openSidebarCreateDialog}
+      onOpenNotificationSettings={openNotificationSettings}
       onNavigate={handleSectionChange}
       onNotificationDismiss={handleDismissNotification}
       onNotificationOpen={handleOpenNotification}
@@ -489,11 +521,13 @@ function AppContent() {
       title={title}
     >
       {activeSection === "projects" ? (
-        <ProjectsPage
-          onProjectDeleted={handleProjectDeleted}
-          onSelectProject={handleSelectProject}
-          selectedProjectId={selectedProjectApiId}
-        />
+      <ProjectsPage
+        onProjectDeleted={handleProjectDeleted}
+        onSelectProject={handleSelectProject}
+        selectedProjectId={selectedProjectApiId}
+      />
+      ) : activeSection === "settings-notifications" ? (
+        <NotificationSettingsPage />
       ) : projectScopedLoading ? (
         <section className="empty-state empty-state--page" aria-live="polite">
           <Loader2 aria-hidden="true" className="spin" size={24} />

@@ -755,6 +755,41 @@ describe("Layout", () => {
     container.remove();
   });
 
+  it("opens notification settings from the settings panel", () => {
+    const onOpenNotificationSettings = vi.fn();
+    const { container, root } = render(
+      <ThemeProvider>
+        <Layout
+          activeSection="projects"
+          onNavigate={vi.fn()}
+          onOpenNotificationSettings={onOpenNotificationSettings}
+          title="프로젝트"
+        >
+          <div />
+        </Layout>
+      </ThemeProvider>,
+    );
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='설정']")?.click();
+    });
+
+    const notificationSettingsButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".settings-panel button"),
+    ).find((button) => button.textContent?.includes("알림 설정"));
+
+    expect(notificationSettingsButton).toBeDefined();
+
+    act(() => {
+      notificationSettingsButton?.click();
+    });
+
+    expect(onOpenNotificationSettings).toHaveBeenCalledOnce();
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
   it("opens theme controls from the settings button", () => {
     const { container, root } = render(
       <ThemeProvider>
@@ -786,6 +821,41 @@ describe("Layout", () => {
     });
 
     expect(document.documentElement.dataset.theme).toBe("dark");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("opens notification settings from the settings panel", () => {
+    const onOpenNotificationSettings = vi.fn();
+    const { container, root } = render(
+      <ThemeProvider>
+        <Layout
+          activeSection="projects"
+          onNavigate={vi.fn()}
+          onOpenNotificationSettings={onOpenNotificationSettings}
+          title="프로젝트"
+        >
+          <div />
+        </Layout>
+      </ThemeProvider>,
+    );
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='설정']")?.click();
+    });
+
+    const notificationSettingsButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".settings-panel button"),
+    ).find((button) => button.textContent?.includes("알림 설정"));
+
+    expect(notificationSettingsButton).toBeDefined();
+
+    act(() => {
+      notificationSettingsButton?.click();
+    });
+
+    expect(onOpenNotificationSettings).toHaveBeenCalledOnce();
 
     act(() => root.unmount());
     container.remove();
@@ -1254,6 +1324,53 @@ describe("App navigation", () => {
         )?.getAttribute("aria-current"),
       ).toBe("page");
     });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("routes notification settings as a global settings page", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/projects")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/notification-settings")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(null, "", "/settings/notifications");
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(<App />);
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/settings/notifications");
+      expect(container.textContent).toContain("알림 설정");
+      expect(container.textContent).not.toContain("프로젝트가 선택되지 않았습니다");
+      expect(container.querySelector(".project-sidebar")).toBeNull();
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='설정']")?.click();
+    });
+
+    const notificationSettingsButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".settings-panel button"),
+    ).find((button) => button.textContent?.includes("알림 설정"));
+    expect(notificationSettingsButton?.dataset.active).toBe("true");
 
     act(() => root.unmount());
     container.remove();
