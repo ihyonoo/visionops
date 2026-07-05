@@ -933,6 +933,12 @@ button {
   line-height: 1.45;
 }
 
+.settings-page__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .notification-settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
@@ -1132,6 +1138,7 @@ button {
 .notification-card {
   min-width: 0;
   min-height: 0;
+  display: grid;
   padding: 20px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1142,6 +1149,7 @@ button {
 .notification-card form {
   display: grid;
   gap: 16px;
+  height: 100%;
 }
 
 .notification-card .form-grid {
@@ -1160,6 +1168,10 @@ button {
   color: var(--muted-text);
   font-size: 13px;
   font-weight: 700;
+}
+
+.notification-card__webhook-spacer {
+  height: 62px;
 }
 
 .notification-card input[type="password"],
@@ -1182,6 +1194,76 @@ button {
 .notification-card input[type="text"]:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.notification-help {
+  min-height: 48px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 82%, var(--surface-subtle));
+}
+
+.notification-help[open] {
+  z-index: 20;
+}
+
+.notification-help summary {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.notification-help__body {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--muted-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.notification-help__body p,
+.notification-help__body ol {
+  margin: 0;
+}
+
+.notification-help__body ol {
+  padding-left: 20px;
+}
+
+.notification-help__tip {
+  color: var(--text);
+}
+
+.notification-help__body a {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  gap: 6px;
+  color: var(--accent-strong);
+  font-weight: 700;
+  text-decoration: none;
 }
 
 .notification-card fieldset {
@@ -1217,6 +1299,10 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.notification-card .button-row {
+  margin-top: auto;
 }
 
 .button-row button {

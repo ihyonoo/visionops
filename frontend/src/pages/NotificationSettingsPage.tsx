@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Save, Send, Trash2 } from "lucide-react";
+import { ArrowLeft, ExternalLink, HelpCircle, Loader2, Save, Send, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 
 import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
@@ -66,6 +66,79 @@ function replaceCachedSetting(
 function apiErrorDetail(error: unknown): string | null {
   if (!(error instanceof Error)) return null;
   return error.message.replace(/^API request failed \(\d+\):\s*/u, "");
+}
+
+type NotificationHelpContent = {
+  docsUrl: string;
+  introKey: string;
+  stepKeys: string[];
+  tipKey: string;
+};
+
+const notificationHelp: Record<NotificationChannelName, NotificationHelpContent> = {
+  discord: {
+    docsUrl: "https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks",
+    introKey: "notificationSettings.help.discord.intro",
+    stepKeys: [
+      "notificationSettings.help.discord.step1",
+      "notificationSettings.help.discord.step2",
+      "notificationSettings.help.discord.step3",
+    ],
+    tipKey: "notificationSettings.help.discord.tip",
+  },
+  slack: {
+    docsUrl: "https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks",
+    introKey: "notificationSettings.help.slack.intro",
+    stepKeys: [
+      "notificationSettings.help.slack.step1",
+      "notificationSettings.help.slack.step2",
+      "notificationSettings.help.slack.step3",
+    ],
+    tipKey: "notificationSettings.help.slack.tip",
+  },
+  telegram: {
+    docsUrl: "https://core.telegram.org/bots/tutorial",
+    introKey: "notificationSettings.help.telegram.intro",
+    stepKeys: [
+      "notificationSettings.help.telegram.step1",
+      "notificationSettings.help.telegram.step2",
+      "notificationSettings.help.telegram.step3",
+    ],
+    tipKey: "notificationSettings.help.telegram.tip",
+  },
+};
+
+function NotificationSetupHelp({
+  channel,
+  title,
+}: {
+  channel: NotificationChannelName;
+  title: string;
+}) {
+  const { t } = useLanguage();
+  const content = notificationHelp[channel];
+
+  return (
+    <details className="notification-help">
+      <summary>
+        <HelpCircle aria-hidden="true" size={15} />
+        <span>{t("notificationSettings.helpTitle", { channel: title })}</span>
+      </summary>
+      <div className="notification-help__body">
+        <p>{t(content.introKey)}</p>
+        <ol>
+          {content.stepKeys.map((stepKey) => (
+            <li key={stepKey}>{t(stepKey)}</li>
+          ))}
+        </ol>
+        <p className="notification-help__tip">{t(content.tipKey)}</p>
+        <a href={content.docsUrl} rel="noreferrer" target="_blank">
+          <span>{t("notificationSettings.officialDocs")}</span>
+          <ExternalLink aria-hidden="true" size={14} />
+        </a>
+      </div>
+    </details>
+  );
 }
 
 type NotificationChannelCardProps = {
@@ -140,7 +213,6 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
   });
 
   const isPending = saveSetting.isPending || testSetting.isPending || deleteSetting.isPending;
-  const showMaskedSecret = setting.channel === "telegram" && setting.masked_secret;
 
   function setEventEnabled(key: keyof NotificationEvents, checked: boolean) {
     setIsDirty(true);
@@ -192,7 +264,6 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
         <div className="panel__header">
           <div>
             <h2>{title}</h2>
-            {showMaskedSecret ? <p>{setting.masked_secret}</p> : null}
           </div>
           {isPending ? <Loader2 aria-hidden="true" className="spin" size={18} /> : null}
         </div>
@@ -244,23 +315,28 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
               </label>
             </>
           ) : (
-            <label>
-              <span>{t("notificationSettings.webhookUrl")}</span>
-              <input
-                aria-label={`${title} Webhook URL`}
-                autoComplete="off"
-                onChange={(event) => {
-                  setIsDirty(true);
-                  setSaveBeforeTestVisible(false);
-                  setWebhookUrlChanged(true);
-                  setWebhookUrl(event.target.value);
-                }}
-                placeholder={setting.has_secret ? t("notificationSettings.storedWebhook") : ""}
-                type="text"
-                value={webhookUrl}
-              />
-            </label>
+            <>
+              <label>
+                <span>{t("notificationSettings.webhookUrl")}</span>
+                <input
+                  aria-label={`${title} Webhook URL`}
+                  autoComplete="off"
+                  onChange={(event) => {
+                    setIsDirty(true);
+                    setSaveBeforeTestVisible(false);
+                    setWebhookUrlChanged(true);
+                    setWebhookUrl(event.target.value);
+                  }}
+                  placeholder={setting.has_secret ? t("notificationSettings.storedWebhook") : ""}
+                  type="text"
+                  value={webhookUrl}
+                />
+              </label>
+              <span aria-hidden="true" className="notification-card__webhook-spacer" />
+            </>
           )}
+
+          <NotificationSetupHelp channel={setting.channel} title={title} />
 
           <fieldset>
             <legend>{t("notificationSettings.events")}</legend>
@@ -332,7 +408,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
   );
 }
 
-export function NotificationSettingsPage() {
+export function NotificationSettingsPage({ onBack }: { onBack?: () => void }) {
   const { t } = useLanguage();
   const settingsQuery = useQuery({
     queryFn: () => apiGet<NotificationSetting[]>("/api/notification-settings"),
@@ -348,7 +424,15 @@ export function NotificationSettingsPage() {
           <h2 id="notification-settings-title">{t("notificationSettings.title")}</h2>
           <p>{t("notificationSettings.description")}</p>
         </div>
-        {settingsQuery.isFetching ? <Loader2 aria-hidden="true" className="spin" size={18} /> : null}
+        <div className="settings-page__actions">
+          {settingsQuery.isFetching ? <Loader2 aria-hidden="true" className="spin" size={18} /> : null}
+          {onBack ? (
+            <button className="secondary-button" onClick={onBack} type="button">
+              <ArrowLeft aria-hidden="true" size={16} />
+              <span>{t("common.back")}</span>
+            </button>
+          ) : null}
+        </div>
       </section>
 
       {settingsQuery.isLoading && !hasSettings ? (

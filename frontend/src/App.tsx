@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { FolderKanban, Loader2, Plus, X } from "lucide-react";
 
@@ -214,6 +214,7 @@ function AppContent() {
     initialHistoryState.trainingRunId ?? null,
   );
   const [focusedInferenceRunId, setFocusedInferenceRunId] = useState<string | null>(null);
+  const notificationSettingsReturnStateRef = useRef<AppHistoryState | null>(null);
   const { t } = useLanguage();
 
   useEffect(() => {
@@ -377,12 +378,48 @@ function AppContent() {
     handleSectionChange("projects");
   }
 
+  function currentHistoryState(): AppHistoryState {
+    if (activeSection === "projects" || activeSection === "settings-notifications") {
+      return { projectId: null, section: activeSection };
+    }
+    const currentProjectId = selectedProjectApiId ?? selectedProjectId;
+    if (currentProjectId) {
+      return {
+        projectId: currentProjectId,
+        section: activeSection,
+        trainingRunId: focusedTrainingRunId,
+      };
+    }
+    return {
+      projectId: null,
+      section: activeSection,
+      trainingRunId: null,
+    };
+  }
+
   function openNotificationSettings() {
     const nextState = { projectId: null, section: "settings-notifications" } satisfies AppHistoryState;
+    notificationSettingsReturnStateRef.current = currentHistoryState();
     window.history.pushState(nextState, "", appPath(null, "settings-notifications"));
     setSelectedProjectId(null);
     setActiveSection("settings-notifications");
     setFocusedTrainingRunId(null);
+  }
+
+  function closeNotificationSettings() {
+    const nextState =
+      notificationSettingsReturnStateRef.current ??
+      ({ projectId: null, section: "projects" } satisfies AppHistoryState);
+    notificationSettingsReturnStateRef.current = null;
+    window.history.pushState(
+      nextState,
+      "",
+      appPath(nextState.projectId, nextState.section, nextState.trainingRunId ?? null, projects),
+    );
+    setSelectedProjectId(nextState.projectId);
+    setActiveSection(nextState.section);
+    setFocusedTrainingRunId(nextState.trainingRunId ?? null);
+    setFocusedInferenceRunId(null);
   }
 
   function handleOpenTrainingRun(projectId: string, runId: string) {
@@ -527,7 +564,7 @@ function AppContent() {
         selectedProjectId={selectedProjectApiId}
       />
       ) : activeSection === "settings-notifications" ? (
-        <NotificationSettingsPage />
+        <NotificationSettingsPage onBack={closeNotificationSettings} />
       ) : projectScopedLoading ? (
         <section className="empty-state empty-state--page" aria-live="polite">
           <Loader2 aria-hidden="true" className="spin" size={24} />

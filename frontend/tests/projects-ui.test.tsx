@@ -1376,6 +1376,107 @@ describe("App navigation", () => {
     container.remove();
   });
 
+  it("returns from notification settings to the previous project section", async () => {
+    const project = {
+      created_at: "2026-07-01T00:00:00Z",
+      description: "",
+      id: "project-1",
+      name: "검수 라인 A",
+      slug: "검수-라인-a",
+      task_type: "detection",
+      updated_at: "2026-07-02T00:00:00Z",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/projects")) {
+          return new Response(JSON.stringify([project]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1")) {
+          return new Response(JSON.stringify(project), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/inference-runs")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/notification-settings")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    window.history.replaceState(null, "", "/");
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(<App />);
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("검수 라인 A");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[data-project-row='project-1']")?.click();
+    });
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/projects/%EA%B2%80%EC%88%98-%EB%9D%BC%EC%9D%B8-a/datasets");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("header [aria-label='설정']")?.click();
+    });
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-panel button"))
+        .find((button) => button.textContent?.includes("알림 설정"))
+        ?.click();
+    });
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/settings/notifications");
+      expect(container.textContent).toContain("알림 설정");
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("돌아가기"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/projects/%EA%B2%80%EC%88%98-%EB%9D%BC%EC%9D%B8-a/datasets");
+      expect(container.textContent).toContain("데이터셋");
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
   it("creates a project from the project sidebar on scoped pages", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

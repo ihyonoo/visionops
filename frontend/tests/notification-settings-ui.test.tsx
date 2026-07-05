@@ -155,6 +155,29 @@ function findButton(container: HTMLElement, name: string) {
 }
 
 describe("NotificationSettingsPage", () => {
+  it("calls back when the user clicks the back button", async () => {
+    const fetchMock = createFetchMock();
+    const onBack = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage onBack={onBack} />);
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("알림 설정");
+    });
+
+    const backButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("돌아가기"),
+    );
+    expect(backButton).not.toBeUndefined();
+
+    await act(async () => {
+      backButton?.click();
+    });
+
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
   it("renders supported channels and saves Slack webhook settings", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -223,6 +246,30 @@ describe("NotificationSettingsPage", () => {
       },
       webhook_url: "https://hooks.slack.test/services/T1/B2/C3",
     });
+  });
+
+  it("shows setup help for Slack, Discord, and Telegram", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Slack");
+      expect(container.textContent).toContain("Discord");
+      expect(container.textContent).toContain("Telegram");
+    });
+
+    const helpSections = Array.from(container.querySelectorAll<HTMLElement>(".notification-help"));
+    expect(helpSections).toHaveLength(3);
+    expect(helpSections[0]?.textContent).toContain("Incoming Webhooks");
+    expect(helpSections[0]?.textContent).toContain("https://hooks.slack.com/services/");
+    expect(helpSections[0]?.textContent).toContain("Workflow Builder");
+    expect(helpSections[1]?.textContent).toContain("서버 설정");
+    expect(helpSections[1]?.textContent).toContain("https://discord.com/api/webhooks/");
+    expect(helpSections[2]?.textContent).toContain("@BotFather");
+    expect(helpSections[2]?.textContent).toContain("getUpdates");
+    expect(helpSections[2]?.textContent).toContain("chat.id");
   });
 
   it("shows backend validation detail when Slack webhook save fails", async () => {
@@ -329,6 +376,27 @@ describe("NotificationSettingsPage", () => {
       expect(slackWebhook?.value).toBe(maskedWebhookUrl);
       expect(slackWebhook?.type).toBe("text");
       expect(container.textContent).not.toContain(maskedWebhookUrl);
+    });
+  });
+
+  it("does not show a saved Telegram token under the card title", async () => {
+    const maskedBotToken = "••••••••telegram";
+    const fetchMock = createFetchMock([
+      defaultSettings[0],
+      defaultSettings[1],
+      {
+        ...defaultSettings[2],
+        has_secret: true,
+        masked_secret: maskedBotToken,
+      },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Telegram");
+      expect(container.textContent).not.toContain(maskedBotToken);
     });
   });
 

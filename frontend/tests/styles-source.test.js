@@ -163,4 +163,48 @@ describe("styles source", () => {
     expect(source).not.toContain('className="project-card-grid"');
     expect(source).not.toContain('className="panel notification');
   });
+
+  it("keeps notification cards equal height with a webhook spacer", () => {
+    const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+    const source = readFileSync(
+      resolve(process.cwd(), "src/pages/NotificationSettingsPage.tsx"),
+      "utf8",
+    );
+    const gridRule = styles.match(
+      /\.notification-settings-grid\s*\{(?<body>[\s\S]*?)\n\}/u,
+    )?.groups?.body;
+    const cardRule = styles.match(/\.notification-card\s*\{(?<body>[\s\S]*?)\n\}/u)
+      ?.groups?.body;
+    const formRule = styles.match(/\.notification-card form\s*\{(?<body>[\s\S]*?)\n\}/u)
+      ?.groups?.body;
+    const spacerRule = styles.match(/\.notification-card__webhook-spacer\s*\{(?<body>[\s\S]*?)\n\}/u)
+      ?.groups?.body;
+    const helpRule = styles.match(/\.notification-help\s*\{(?<body>[\s\S]*?)\n\}/u)
+      ?.groups?.body;
+    const openHelpRule = styles.match(/\.notification-help\[open\]\s*\{(?<body>[\s\S]*?)\n\}/u)
+      ?.groups?.body;
+    const helpSummaryRule = styles.match(/\.notification-help summary\s*\{(?<body>[\s\S]*?)\n\}/u)
+      ?.groups?.body;
+    const helpBodyRule = styles.match(/\.notification-help__body\s*\{(?<body>[\s\S]*?)\n\}/u)
+      ?.groups?.body;
+    const notificationButtonRule = styles.match(
+      /\.notification-card \.button-row\s*\{(?<body>[\s\S]*?)\n\}/u,
+    )?.groups?.body;
+
+    expect(gridRule).not.toContain("align-items: start");
+    expect(cardRule).toContain("display: grid");
+    expect(formRule).toContain("height: 100%");
+    expect(formRule).not.toContain("minmax(0, 1fr)");
+    expect(spacerRule).toContain("height: 62px");
+    expect(helpRule).toContain("display: flex");
+    expect(helpRule).toContain("justify-content: center");
+    expect(helpRule).toContain("min-height: 48px");
+    expect(helpRule).toContain("position: relative");
+    expect(openHelpRule).toContain("z-index: 20");
+    expect(helpSummaryRule).toContain("min-height: 24px");
+    expect(helpBodyRule).toContain("position: absolute");
+    expect(helpBodyRule).toContain("top: calc(100% + 8px)");
+    expect(notificationButtonRule).toContain("margin-top: auto");
+    expect(source).toContain('className="notification-card__webhook-spacer"');
+  });
 });
