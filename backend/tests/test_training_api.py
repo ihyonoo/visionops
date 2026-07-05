@@ -91,6 +91,34 @@ print("absolute project training")
     executable.chmod(0o755)
 
 
+def _write_task_asserting_yolo(bin_dir: Path, expected_task: str) -> None:
+    executable = bin_dir / "yolo"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text(
+        f'''#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+if sys.argv[1:3] != ["{expected_task}", "train"]:
+    print("unexpected task", sys.argv[1:3])
+    sys.exit(8)
+args = dict(arg.split("=", 1) for arg in sys.argv[3:] if "=" in arg)
+run_dir = Path(args["project"]) / args["name"]
+(run_dir / "weights").mkdir(parents=True, exist_ok=True)
+(run_dir / "results.csv").write_text(
+    "epoch, train/loss, val/loss, metrics/accuracy_top1, metrics/accuracy_top5\\n"
+    "0,1.0,0.9,0.74,0.93\\n",
+    encoding="utf-8",
+)
+(run_dir / "weights" / "best.pt").write_text("best", encoding="utf-8")
+(run_dir / "weights" / "last.pt").write_text("last", encoding="utf-8")
+print("classification training")
+''',
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+
+
 def _write_no_output_yolo(bin_dir: Path) -> None:
     executable = bin_dir / "yolo"
     executable.parent.mkdir(parents=True, exist_ok=True)
@@ -308,6 +336,75 @@ def test_training_worker_completes_run_and_creates_artifacts(db, tmp_path, monke
     assert all(re.fullmatch(r"art_[2-9a-z]{10}", artifact.id) for artifact in artifacts)
     assert all(Path(artifact.path).exists() for artifact in artifacts)
     assert Path(run.log_path).read_text(encoding="utf-8").strip() == "worker fake training"
+
+
+def test_training_worker_runs_classification_task(db, tmp_path, monkeypatch):
+    project = Project(
+        id="project-cls",
+        name="분류",
+        slug="classification",
+        description="",
+        task_type="classification",
+    )
+    dataset = Dataset(
+        id="dataset-cls",
+        project_id=project.id,
+        name="cls",
+        source_path=str(tmp_path / "dataset"),
+        format="yolo-classification",
+        class_names=["ng", "ok"],
+        image_count=4,
+        label_count=0,
+        validation_status="valid",
+        validation_summary={},
+    )
+    split_root = tmp_path / "split"
+    split_root.mkdir()
+    split_data_yaml = split_root / "data.yaml"
+    split_data_yaml.write_text("task: classification\n", encoding="utf-8")
+    split = DatasetSplit(
+        id="split-cls",
+        dataset_id=dataset.id,
+        name="split",
+        train_ratio=0.8,
+        val_ratio=0.2,
+        test_ratio=0,
+        seed=42,
+        train_count=3,
+        val_count=1,
+        test_count=0,
+        split_path=str(split_root),
+        dataset_yaml_path=str(split_data_yaml),
+    )
+    run = TrainingRun(
+        id="run-cls",
+        project_id=project.id,
+        dataset_id=dataset.id,
+        split_id=split.id,
+        name="cls run",
+        model_name="yolo26s-cls",
+        trainer="ultralytics",
+        status="queued",
+        config={"epochs": 1, "imgsz": 224, "batch": 2, "device": "cpu"},
+        metrics_summary={},
+    )
+    job = Job(id="job-cls", type="training", target_id=run.id, status="queued")
+    db.add_all([project, dataset, split, run, job])
+    db.commit()
+
+    bin_dir = tmp_path / "bin"
+    _write_task_asserting_yolo(bin_dir, "classify")
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+
+    handle_training_job(db, job)
+
+    db.refresh(run)
+    assert run.status == "completed"
+    assert run.metrics_summary["best_accuracy_top1"] == 0.74
+    assert (
+        db.scalar(select(ModelArtifact).where(ModelArtifact.training_run_id == run.id))
+        is not None
+    )
 
 
 def test_training_worker_passes_absolute_project_path_to_yolo(db, tmp_path, monkeypatch):

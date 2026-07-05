@@ -207,6 +207,14 @@ def handle_training_job(db: Session, job: Job) -> None:
         notify_training_finished(db, run, "training_failed")
         return
 
+    project = db.get(Project, run.project_id)
+    task_type = project.task_type if project is not None else "detection"
+    data_path = (
+        Path(split.split_path)
+        if task_type == "classification"
+        else Path(split.dataset_yaml_path)
+    )
+
     now = datetime.now(timezone.utc)
     run_dir = StoragePaths(settings.artifact_root).train_run_dir(run.project_id, run.id).resolve()
     stdout_log_path = run_dir / "logs" / "stdout.log"
@@ -219,8 +227,9 @@ def handle_training_job(db: Session, job: Job) -> None:
     config = _training_config(run)
     try:
         result = run_yolo_training(
+            task_type=task_type,
             model_name=run.model_name,
-            data_yaml_path=Path(split.dataset_yaml_path),
+            data_path=data_path,
             config=config,
             run_parent=run_dir.parent,
             run_name=run_dir.name,
