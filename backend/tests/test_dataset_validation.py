@@ -108,3 +108,53 @@ def test_orphan_labels_compare_relative_paths_not_stems(tmp_path):
     assert result.orphan_label_count == 1
     assert any("images/train/same.jpg" in warning for warning in result.warnings)
     assert any("labels/val/same.txt" in warning for warning in result.warnings)
+
+
+def make_classification_dataset(root: Path) -> Path:
+    for class_name in ("ok", "ng"):
+        class_dir = root / class_name
+        class_dir.mkdir(parents=True)
+        Image.new("RGB", (16, 16), color="white").save(class_dir / f"{class_name}.jpg")
+    return root
+
+
+def test_valid_classification_dataset_from_class_folders(tmp_path):
+    from app.services.dataset_validation import validate_classification_dataset
+
+    result = validate_classification_dataset(make_classification_dataset(tmp_path / "cls"))
+
+    assert result.status == "valid"
+    assert result.class_names == ["ng", "ok"]
+    assert result.image_count == 2
+    assert result.label_count == 0
+    assert result.class_distribution == {"ng": 1, "ok": 1}
+
+
+def test_valid_classification_dataset_from_train_val_layout(tmp_path):
+    from app.services.dataset_validation import validate_classification_dataset
+
+    for subset in ("train", "val"):
+        for class_name in ("ok", "ng"):
+            class_dir = tmp_path / "cls" / subset / class_name
+            class_dir.mkdir(parents=True)
+            Image.new("RGB", (16, 16), color="white").save(class_dir / f"{subset}-{class_name}.jpg")
+
+    result = validate_classification_dataset(tmp_path / "cls")
+
+    assert result.status == "valid"
+    assert result.class_names == ["ng", "ok"]
+    assert result.image_count == 4
+    assert result.class_distribution == {"ng": 2, "ok": 2}
+
+
+def test_classification_dataset_requires_two_classes(tmp_path):
+    from app.services.dataset_validation import validate_classification_dataset
+
+    class_dir = tmp_path / "cls" / "only"
+    class_dir.mkdir(parents=True)
+    Image.new("RGB", (16, 16), color="white").save(class_dir / "one.jpg")
+
+    result = validate_classification_dataset(tmp_path / "cls")
+
+    assert result.status == "invalid"
+    assert any("최소 2개" in error for error in result.errors)

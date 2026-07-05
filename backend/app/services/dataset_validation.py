@@ -6,6 +6,7 @@ import yaml
 from PIL import Image
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+CLASSIFICATION_SUBSETS = ("train", "val", "test")
 
 
 @dataclass
@@ -95,6 +96,81 @@ def _image_files(images_dir: Path) -> list[Path]:
 
 def _display_path(path: Path) -> str:
     return path.as_posix()
+
+
+def _classification_class_roots(dataset_root: Path) -> dict[str, Path]:
+    if any((dataset_root / subset).is_dir() for subset in CLASSIFICATION_SUBSETS):
+        class_names: set[str] = set()
+        for subset in CLASSIFICATION_SUBSETS:
+            subset_root = dataset_root / subset
+            if not subset_root.is_dir():
+                continue
+            for child in subset_root.iterdir():
+                if child.is_dir():
+                    class_names.add(child.name)
+        return {class_name: dataset_root for class_name in sorted(class_names)}
+
+    return {
+        child.name: child
+        for child in sorted(dataset_root.iterdir())
+        if child.is_dir() and child.name not in {"images", "labels"}
+    }
+
+
+def _classification_images_for_class(dataset_root: Path, class_name: str) -> list[Path]:
+    subset_roots = [dataset_root / subset / class_name for subset in CLASSIFICATION_SUBSETS]
+    existing_subset_roots = [root for root in subset_roots if root.is_dir()]
+    if existing_subset_roots:
+        roots = existing_subset_roots
+    else:
+        roots = [dataset_root / class_name]
+    return sorted(
+        path
+        for root in roots
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
+def validate_classification_dataset(dataset_root: Path) -> ValidationResult:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not dataset_root.exists():
+        return ValidationResult(status="invalid", errors=[f"Dataset path does not exist: {dataset_root}"])
+
+    class_roots = _classification_class_roots(dataset_root)
+    class_names = sorted(class_roots)
+    if len(class_names) < 2:
+        errors.append("Classification 데이터셋은 최소 2개 class directory가 필요합니다.")
+
+    class_distribution: dict[str, int] = {}
+    image_count = 0
+    for class_name in class_names:
+        images = _classification_images_for_class(dataset_root, class_name)
+        class_distribution[class_name] = len(images)
+        image_count += len(images)
+        if not images:
+            errors.append(f"class directory에 이미지가 없습니다: {class_name}")
+        for image_path in images:
+            try:
+                with Image.open(image_path) as image:
+                    image.verify()
+            except Exception as exc:
+                errors.append(f"Corrupt image {image_path}: {exc}")
+
+    if image_count == 0:
+        errors.append("Classification 데이터셋에 이미지가 없습니다.")
+
+    return ValidationResult(
+        status="invalid" if errors else "valid",
+        class_names=class_names,
+        image_count=image_count,
+        label_count=0,
+        warnings=warnings,
+        errors=errors,
+        class_distribution=class_distribution,
+    )
 
 
 def validate_yolo_dataset(dataset_root: Path) -> ValidationResult:
