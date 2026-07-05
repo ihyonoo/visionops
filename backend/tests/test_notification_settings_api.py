@@ -104,6 +104,45 @@ def test_update_rejects_wrong_channel_secret(client):
     assert "chat id" in telegram_response.json()["detail"]
 
 
+def test_update_slack_rejects_non_provider_webhook_without_echoing_url(client):
+    raw_url = "http://127.0.0.1:9/internal"
+
+    response = client.put(
+        "/api/notification-settings/slack",
+        json={"enabled": True, "webhook_url": raw_url},
+    )
+
+    assert response.status_code == 400
+    assert raw_url not in response.text
+    assert "Slack webhook URL" in response.json()["detail"]
+
+
+def test_test_notification_rejects_invalid_webhook_override_without_sending(client, monkeypatch):
+    create_response = client.put(
+        "/api/notification-settings/slack",
+        json={
+            "enabled": True,
+            "webhook_url": "https://hooks.slack.com/services/T000/B000/SECRET",
+        },
+    )
+    assert create_response.status_code == 200
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("invalid webhook override should not be sent")
+
+    monkeypatch.setattr("app.services.notifications.httpx.post", fail_post)
+    raw_url = "http://127.0.0.1:9/internal"
+
+    response = client.post(
+        "/api/notification-settings/slack/test",
+        json={"webhook_url": raw_url},
+    )
+
+    assert response.status_code == 400
+    assert raw_url not in response.text
+    assert "Slack webhook URL" in response.json()["detail"]
+
+
 def test_delete_notification_setting_resets_to_default(client):
     create_response = client.put(
         "/api/notification-settings/discord",

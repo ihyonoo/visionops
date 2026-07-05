@@ -6,12 +6,14 @@ from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models import NotificationChannel, NotificationDelivery
+from app.schemas import NotificationSettingUpdate
 from app.services.notifications import (
     NotificationEvent,
     masked_channel_secret,
     mask_secret,
     redact_secret,
     send_work_notification,
+    validate_channel_payload,
 )
 
 
@@ -65,6 +67,50 @@ def test_redact_secret_removes_webhook_and_token():
     assert "SECRET" not in redacted
     assert "TOKEN" not in redacted
     assert "[redacted]" in redacted
+
+
+def test_validate_channel_payload_rejects_invalid_discord_webhooks():
+    invalid_values = [
+        "http://discord.com/api/webhooks/123/SECRET",
+        "https://example.com/api/webhooks/123/SECRET",
+    ]
+
+    for webhook_url in invalid_values:
+        payload = NotificationSettingUpdate(enabled=True, webhook_url=webhook_url)
+        with pytest.raises(ValueError) as exc_info:
+            validate_channel_payload("discord", payload)
+        assert webhook_url not in str(exc_info.value)
+        assert "Discord webhook URL" in str(exc_info.value)
+
+
+def test_validate_channel_payload_accepts_provider_webhooks():
+    slack_config = validate_channel_payload(
+        "slack",
+        NotificationSettingUpdate(
+            enabled=True,
+            webhook_url="https://hooks.slack.com/services/T000/B000/SECRET",
+        ),
+    )
+    discord_config = validate_channel_payload(
+        "discord",
+        NotificationSettingUpdate(
+            enabled=True,
+            webhook_url="https://discord.com/api/webhooks/123/SECRET",
+        ),
+    )
+    legacy_discord_config = validate_channel_payload(
+        "discord",
+        NotificationSettingUpdate(
+            enabled=True,
+            webhook_url="https://discordapp.com/api/webhooks/123/SECRET",
+        ),
+    )
+
+    assert slack_config["webhook_url"].startswith("https://hooks.slack.com/services/")
+    assert discord_config["webhook_url"].startswith("https://discord.com/api/webhooks/")
+    assert legacy_discord_config["webhook_url"].startswith(
+        "https://discordapp.com/api/webhooks/"
+    )
 
 
 def test_send_work_notification_skips_disabled_event(db, monkeypatch):

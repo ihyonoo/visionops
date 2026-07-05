@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import select
@@ -86,6 +87,35 @@ def _non_empty(value: str | None) -> bool:
     return value is not None and value.strip() != ""
 
 
+def _validate_webhook_url(channel: str, webhook_url: str) -> None:
+    parsed = urlparse(webhook_url)
+    hostname = parsed.hostname or ""
+    if channel == "slack":
+        valid = (
+            parsed.scheme == "https"
+            and hostname == "hooks.slack.com"
+            and parsed.path.startswith("/services/")
+        )
+        if not valid:
+            raise ValueError("Slack webhook URL must be an HTTPS hooks.slack.com /services/ URL.")
+    elif channel == "discord":
+        valid = (
+            parsed.scheme == "https"
+            and hostname in {"discord.com", "discordapp.com"}
+            and parsed.path.startswith("/api/webhooks/")
+        )
+        if not valid:
+            raise ValueError(
+                "Discord webhook URL must be an HTTPS discord.com or discordapp.com "
+                "/api/webhooks/ URL."
+            )
+
+
+def _validate_channel_config(channel: str, config: dict) -> None:
+    if channel in {"slack", "discord"} and _non_empty(config.get("webhook_url")):
+        _validate_webhook_url(channel, config["webhook_url"])
+
+
 def _provided_fields(payload: object) -> set[str]:
     fields = getattr(payload, "model_fields_set", None)
     if fields is None:
@@ -99,6 +129,7 @@ def _config_with_updates(channel: str, stored_config: dict, payload: object) -> 
         webhook_url = getattr(payload, "webhook_url", None)
         if _non_empty(webhook_url):
             config["webhook_url"] = webhook_url.strip()
+            _validate_webhook_url(channel, config["webhook_url"])
         return config
 
     bot_token = getattr(payload, "bot_token", None)
@@ -123,6 +154,7 @@ def validate_channel_payload(channel: str, payload: object, stored_config: dict 
         raise ValueError("Unsupported notification channel.")
 
     config = _config_with_updates(channel, stored_config or {}, payload)
+    _validate_channel_config(channel, config)
     enabled = bool(getattr(payload, "enabled", False))
     if enabled:
         if channel in {"slack", "discord"} and not _non_empty(config.get("webhook_url")):
@@ -268,6 +300,7 @@ def send_test_notification(
     config: dict,
     setting: NotificationChannel | None = None,
 ) -> NotificationResult:
+    _validate_channel_config(channel, config)
     event = NotificationEvent(
         event_type="test",
         target_type="notification_settings",
