@@ -130,10 +130,10 @@ def test_valid_classification_dataset_from_class_folders(tmp_path):
     assert result.class_distribution == {"ng": 1, "ok": 1}
 
 
-def test_valid_classification_dataset_from_train_val_layout(tmp_path):
+def test_valid_classification_dataset_from_train_val_test_layout(tmp_path):
     from app.services.dataset_validation import validate_classification_dataset
 
-    for subset in ("train", "val"):
+    for subset in ("train", "val", "test"):
         for class_name in ("ok", "ng"):
             class_dir = tmp_path / "cls" / subset / class_name
             class_dir.mkdir(parents=True)
@@ -143,8 +143,8 @@ def test_valid_classification_dataset_from_train_val_layout(tmp_path):
 
     assert result.status == "valid"
     assert result.class_names == ["ng", "ok"]
-    assert result.image_count == 4
-    assert result.class_distribution == {"ng": 2, "ok": 2}
+    assert result.image_count == 6
+    assert result.class_distribution == {"ng": 3, "ok": 3}
 
 
 def test_classification_dataset_requires_two_classes(tmp_path):
@@ -158,3 +158,19 @@ def test_classification_dataset_requires_two_classes(tmp_path):
 
     assert result.status == "invalid"
     assert any("최소 2개" in error for error in result.errors)
+
+
+def test_classification_dataset_reports_corrupt_images(tmp_path):
+    from app.services.dataset_validation import validate_classification_dataset
+
+    ok_dir = tmp_path / "cls" / "ok"
+    ng_dir = tmp_path / "cls" / "ng"
+    ok_dir.mkdir(parents=True)
+    ng_dir.mkdir(parents=True)
+    Image.new("RGB", (16, 16), color="white").save(ok_dir / "ok.jpg")
+    (ng_dir / "broken.jpg").write_text("not an image", encoding="utf-8")
+
+    result = validate_classification_dataset(tmp_path / "cls")
+
+    assert result.status == "invalid"
+    assert any("Corrupt image" in error for error in result.errors)
