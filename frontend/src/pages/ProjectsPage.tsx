@@ -162,7 +162,6 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
       body: {
         description: description.trim(),
         name: trimmedName,
-        task_type: taskType,
       },
     });
   }
@@ -405,18 +404,6 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
                   rows={4}
                   value={description}
                 />
-              </label>
-
-              <label className="field">
-                <span>{t("projects.taskType")}</span>
-                <select
-                  aria-label={t("projects.taskType")}
-                  onChange={(event) => setTaskType(event.target.value as ProjectTaskType)}
-                  value={taskType}
-                >
-                  <option value="detection">{t("projects.detection")}</option>
-                  <option value="classification">{t("projects.classification")}</option>
-                </select>
               </label>
 
               {updateProject.isError ? (

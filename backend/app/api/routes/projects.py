@@ -53,13 +53,40 @@ def unique_project_slug(db: Session, name: str, exclude_project_id: str | None =
 
 
 def _first_dataset_image(dataset: Dataset) -> Path | None:
-    images_root = Path(dataset.source_path) / "images"
+    dataset_root = Path(dataset.source_path)
+    images_root = dataset_root if dataset.format == "yolo-classification" else dataset_root / "images"
     if not images_root.is_dir():
         return None
     for image_path in sorted(images_root.rglob("*")):
         if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS:
             return image_path
     return None
+
+
+def _project_has_resources(db: Session, project_id: str) -> bool:
+    dataset_id = db.scalar(select(Dataset.id).where(Dataset.project_id == project_id).limit(1))
+    if dataset_id is not None:
+        return True
+
+    training_run_id = db.scalar(
+        select(TrainingRun.id).where(TrainingRun.project_id == project_id).limit(1)
+    )
+    if training_run_id is not None:
+        return True
+
+    inference_run_id = db.scalar(
+        select(InferenceRun.id).where(InferenceRun.project_id == project_id).limit(1)
+    )
+    if inference_run_id is not None:
+        return True
+
+    split_id = db.scalar(
+        select(DatasetSplit.id)
+        .join(Dataset, DatasetSplit.dataset_id == Dataset.id)
+        .where(Dataset.project_id == project_id)
+        .limit(1)
+    )
+    return split_id is not None
 
 
 @router.post("", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
@@ -112,7 +139,12 @@ def update_project(
         project.slug = unique_project_slug(db, payload.name, exclude_project_id=project.id)
     if payload.description is not None:
         project.description = payload.description
-    if payload.task_type is not None:
+    if payload.task_type is not None and payload.task_type != project.task_type:
+        if _project_has_resources(db, project.id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="리소스가 있는 프로젝트의 작업 유형은 변경할 수 없습니다.",
+            )
         project.task_type = payload.task_type
     db.add(project)
     db.commit()

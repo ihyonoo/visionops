@@ -348,7 +348,6 @@ describe("ProjectsPage", () => {
         expect(JSON.parse(String(init.body))).toEqual({
           description: "수정된 설명",
           name: "수정된 프로젝트",
-          task_type: "detection",
         });
         return new Response(
           JSON.stringify({
@@ -403,6 +402,7 @@ describe("ProjectsPage", () => {
     });
 
     const editDialog = container.querySelector<HTMLElement>("[role='dialog']");
+    expect(editDialog?.querySelector<HTMLSelectElement>("[aria-label='작업 유형']")).toBeNull();
     const editName = editDialog?.querySelector<HTMLInputElement>("input");
     const editDescription = editDialog?.querySelector<HTMLTextAreaElement>("textarea");
     const editForm = editDialog?.querySelector("form");

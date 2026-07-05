@@ -137,6 +137,32 @@ def test_project_thumbnail_serves_first_dataset_image(client, tmp_path):
     assert response.content
 
 
+def test_classification_project_thumbnail_serves_first_class_image(client, tmp_path):
+    created_project = client.post(
+        "/api/projects",
+        json={"name": "분류 프로젝트", "description": "", "task_type": "classification"},
+    )
+    assert created_project.status_code == 201
+    project_id = created_project.json()["id"]
+    dataset_root = tmp_path / "cls"
+    for class_name in ("ok", "ng"):
+        class_dir = dataset_root / class_name
+        class_dir.mkdir(parents=True)
+        Image.new("RGB", (16, 16), color="white").save(class_dir / f"{class_name}.jpg")
+
+    created_dataset = client.post(
+        f"/api/projects/{project_id}/datasets",
+        json={"name": "cls", "source_path": str(dataset_root)},
+    )
+    assert created_dataset.status_code == 201
+
+    response = client.get(f"/api/projects/{project_id}/thumbnail")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/")
+    assert response.content
+
+
 def test_delete_project_removes_related_records_and_managed_files(client, db):
     project = Project(id="project-delete", name="factory", description="", task_type="detection")
     dataset = Dataset(
@@ -307,3 +333,31 @@ def test_update_project_task_type(client):
 
     assert response.status_code == 200
     assert response.json()["task_type"] == "classification"
+
+
+def test_update_project_task_type_rejects_project_with_dataset(client, tmp_path):
+    created = client.post(
+        "/api/projects",
+        json={"name": "task 보호", "description": "", "task_type": "detection"},
+    )
+    assert created.status_code == 201
+    project_id = created.json()["id"]
+    dataset_root = tmp_path / "dataset"
+    (dataset_root / "images").mkdir(parents=True)
+    (dataset_root / "labels").mkdir()
+    (dataset_root / "data.yaml").write_text(yaml.safe_dump({"names": ["scratch"]}), encoding="utf-8")
+    Image.new("RGB", (16, 16), color="white").save(dataset_root / "images" / "part.jpg")
+    (dataset_root / "labels" / "part.txt").write_text("0 0.5 0.5 0.25 0.25\n", encoding="utf-8")
+    created_dataset = client.post(
+        f"/api/projects/{project_id}/datasets",
+        json={"name": "line-a", "source_path": str(dataset_root)},
+    )
+    assert created_dataset.status_code == 201
+
+    response = client.patch(
+        f"/api/projects/{project_id}",
+        json={"task_type": "classification"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "리소스가 있는 프로젝트의 작업 유형은 변경할 수 없습니다."
