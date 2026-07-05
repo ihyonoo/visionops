@@ -1,0 +1,178 @@
+from collections.abc import Generator
+
+import httpx
+import pytest
+from sqlalchemy import select
+
+from app.db import SessionLocal
+from app.models import NotificationChannel, NotificationDelivery
+from app.services.notifications import (
+    NotificationEvent,
+    mask_secret,
+    redact_secret,
+    send_work_notification,
+)
+
+
+@pytest.fixture
+def db() -> Generator:
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def test_mask_secret_preserves_prefix_and_hides_tail():
+    masked = mask_secret("https://hooks.slack.com/services/SECRET")
+
+    assert masked.startswith("https://")
+    assert "SECRET" not in masked
+    assert masked.endswith("****")
+
+
+def test_redact_secret_removes_webhook_and_token():
+    message = (
+        "failed https://hooks.slack.com/services/SECRET and "
+        "https://api.telegram.org/botTOKEN/sendMessage"
+    )
+
+    redacted = redact_secret(message, ["https://hooks.slack.com/services/SECRET", "TOKEN"])
+
+    assert "SECRET" not in redacted
+    assert "TOKEN" not in redacted
+    assert "[redacted]" in redacted
+
+
+def test_send_work_notification_skips_disabled_event(db, monkeypatch):
+    channel = NotificationChannel(
+        id="ntf_slack",
+        channel="slack",
+        enabled=1,
+        events={
+            "training_completed": False,
+            "training_failed": True,
+            "inference_completed": True,
+            "inference_failed": True,
+        },
+        config={"webhook_url": "https://hooks.slack.com/services/SECRET"},
+    )
+    db.add(channel)
+    db.commit()
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("disabled events should not send")
+
+    monkeypatch.setattr("app.services.notifications.httpx.post", fail_post)
+
+    results = send_work_notification(
+        db,
+        NotificationEvent(
+            event_type="training_completed",
+            target_type="training_run",
+            target_id="run-1",
+            text="Training completed",
+        ),
+    )
+
+    assert results == []
+    assert db.scalars(select(NotificationDelivery)).all() == []
+
+
+def test_send_work_notification_records_failure(db, monkeypatch):
+    webhook_url = "https://hooks.slack.com/services/SECRET"
+    channel = NotificationChannel(
+        id="ntf_slack",
+        channel="slack",
+        enabled=1,
+        events={
+            "training_completed": True,
+            "training_failed": True,
+            "inference_completed": True,
+            "inference_failed": True,
+        },
+        config={"webhook_url": webhook_url},
+    )
+    db.add(channel)
+    db.commit()
+
+    def timeout_post(*args, **kwargs):
+        raise httpx.TimeoutException(f"timeout posting to {webhook_url}")
+
+    monkeypatch.setattr("app.services.notifications.httpx.post", timeout_post)
+
+    results = send_work_notification(
+        db,
+        NotificationEvent(
+            event_type="training_failed",
+            target_type="training_run",
+            target_id="run-2",
+            text="Training failed",
+        ),
+    )
+
+    db.refresh(channel)
+    delivery = db.scalar(select(NotificationDelivery))
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert channel.last_status == "failed"
+    assert channel.last_error is not None
+    assert "SECRET" not in channel.last_error
+    assert delivery is not None
+    assert delivery.status == "failed"
+    assert delivery.error_message is not None
+    assert "SECRET" not in delivery.error_message
+
+
+def test_send_work_notification_posts_slack_payload(db, monkeypatch):
+    channel = NotificationChannel(
+        id="ntf_slack",
+        channel="slack",
+        enabled=1,
+        events={
+            "training_completed": True,
+            "training_failed": True,
+            "inference_completed": True,
+            "inference_failed": True,
+        },
+        config={"webhook_url": "https://hooks.slack.com/services/SECRET"},
+    )
+    db.add(channel)
+    db.commit()
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+    def capture_post(url, json, timeout):
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return Response()
+
+    monkeypatch.setattr("app.services.notifications.httpx.post", capture_post)
+
+    results = send_work_notification(
+        db,
+        NotificationEvent(
+            event_type="training_completed",
+            target_type="training_run",
+            target_id="run-3",
+            text="Training completed",
+        ),
+    )
+
+    db.refresh(channel)
+    delivery = db.scalar(select(NotificationDelivery))
+    assert len(results) == 1
+    assert results[0].status == "sent"
+    assert calls == [
+        {
+            "url": "https://hooks.slack.com/services/SECRET",
+            "json": {"text": "Training completed"},
+            "timeout": 10,
+        }
+    ]
+    assert channel.last_status == "sent"
+    assert channel.last_sent_at is not None
+    assert delivery is not None
+    assert delivery.status == "sent"
