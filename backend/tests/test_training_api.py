@@ -91,9 +91,16 @@ print("absolute project training")
     executable.chmod(0o755)
 
 
-def _write_task_asserting_yolo(bin_dir: Path, expected_task: str) -> None:
+def _write_task_asserting_yolo(
+    bin_dir: Path,
+    expected_task: str,
+    expected_data_path: Path | None = None,
+) -> None:
     executable = bin_dir / "yolo"
     executable.parent.mkdir(parents=True, exist_ok=True)
+    expected_data = (
+        str(expected_data_path.resolve()) if expected_data_path is not None else ""
+    )
     executable.write_text(
         f'''#!/usr/bin/env python3
 import sys
@@ -103,6 +110,10 @@ if sys.argv[1:3] != ["{expected_task}", "train"]:
     print("unexpected task", sys.argv[1:3])
     sys.exit(8)
 args = dict(arg.split("=", 1) for arg in sys.argv[3:] if "=" in arg)
+expected_data = {expected_data!r}
+if expected_data and args.get("data") != expected_data:
+    print("unexpected data", args.get("data"))
+    sys.exit(10)
 run_dir = Path(args["project"]) / args["name"]
 (run_dir / "weights").mkdir(parents=True, exist_ok=True)
 (run_dir / "results.csv").write_text(
@@ -393,18 +404,107 @@ def test_training_worker_runs_classification_task(db, tmp_path, monkeypatch):
     db.commit()
 
     bin_dir = tmp_path / "bin"
-    _write_task_asserting_yolo(bin_dir, "classify")
+    _write_task_asserting_yolo(bin_dir, "classify", split_root)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
 
     handle_training_job(db, job)
 
+    db.refresh(job)
     db.refresh(run)
     assert run.status == "completed"
+    assert job.status == "completed"
     assert run.metrics_summary["best_accuracy_top1"] == 0.74
     assert (
         db.scalar(select(ModelArtifact).where(ModelArtifact.training_run_id == run.id))
         is not None
     )
+
+
+def test_training_worker_fails_when_project_task_dataset_format_mismatch(
+    db, tmp_path, monkeypatch
+):
+    project = Project(
+        id="project-cls-mismatch",
+        name="분류",
+        slug="classification-mismatch",
+        description="",
+        task_type="classification",
+    )
+    dataset_root = tmp_path / "dataset"
+    dataset_root.mkdir()
+    data_yaml = dataset_root / "data.yaml"
+    data_yaml.write_text("names: [scratch]\n", encoding="utf-8")
+    dataset = Dataset(
+        id="dataset-det-mismatch",
+        project_id=project.id,
+        name="det",
+        source_path=str(dataset_root),
+        format="yolo",
+        class_names=["scratch"],
+        image_count=2,
+        label_count=2,
+        validation_status="valid",
+        validation_summary={},
+    )
+    split = DatasetSplit(
+        id="split-det-mismatch",
+        dataset_id=dataset.id,
+        name="split",
+        train_ratio=0.8,
+        val_ratio=0.2,
+        test_ratio=0,
+        seed=42,
+        train_count=1,
+        val_count=1,
+        test_count=0,
+        split_path=str(tmp_path / "split"),
+        dataset_yaml_path=str(data_yaml),
+    )
+    run = TrainingRun(
+        id="run-task-format-mismatch",
+        project_id=project.id,
+        dataset_id=dataset.id,
+        split_id=split.id,
+        name="mismatch",
+        model_name="yolo26s-cls",
+        trainer="ultralytics",
+        status="queued",
+        config={"epochs": 1, "imgsz": 224, "batch": 2, "device": "cpu"},
+        metrics_summary={},
+    )
+    job = Job(
+        id="job-task-format-mismatch",
+        type="training",
+        target_id=run.id,
+        status="queued",
+    )
+    db.add_all([project, dataset, split, run, job])
+    db.commit()
+
+    executed_marker = tmp_path / "yolo-executed"
+    bin_dir = tmp_path / "bin"
+    executable = bin_dir / "yolo"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text(
+        f"""#!/usr/bin/env python3
+from pathlib import Path
+
+Path({str(executed_marker)!r}).write_text("executed", encoding="utf-8")
+raise SystemExit(99)
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+
+    handle_training_job(db, job)
+
+    db.refresh(run)
+    db.refresh(job)
+    assert run.status == "failed"
+    assert job.status == "failed"
+    assert "일치하지 않습니다" in job.error_message
+    assert not executed_marker.exists()
 
 
 def test_training_worker_passes_absolute_project_path_to_yolo(db, tmp_path, monkeypatch):

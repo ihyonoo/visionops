@@ -207,13 +207,43 @@ def handle_training_job(db: Session, job: Job) -> None:
         notify_training_finished(db, run, "training_failed")
         return
 
+    dataset = db.get(Dataset, run.dataset_id)
+    if dataset is None:
+        run.status = "failed"
+        run.finished_at = datetime.now(timezone.utc)
+        job.status = FAILED
+        job.error_message = "학습에 사용할 데이터셋을 찾을 수 없습니다."
+        db.commit()
+        notify_training_finished(db, run, "training_failed")
+        return
+
+    if split.dataset_id != run.dataset_id or dataset.project_id != run.project_id:
+        run.status = "failed"
+        run.finished_at = datetime.now(timezone.utc)
+        job.status = FAILED
+        job.error_message = "학습 실행과 데이터셋 split의 소속이 일치하지 않습니다."
+        db.commit()
+        notify_training_finished(db, run, "training_failed")
+        return
+
     project = db.get(Project, run.project_id)
-    task_type = project.task_type if project is not None else "detection"
-    data_path = (
-        Path(split.split_path)
-        if task_type == "classification"
-        else Path(split.dataset_yaml_path)
-    )
+    is_classification_project = project.task_type == "classification" if project else False
+    is_classification_dataset = dataset.format == "yolo-classification"
+    if is_classification_project != is_classification_dataset:
+        run.status = "failed"
+        run.finished_at = datetime.now(timezone.utc)
+        job.status = FAILED
+        job.error_message = "프로젝트 task와 데이터셋 형식이 일치하지 않습니다."
+        db.commit()
+        notify_training_finished(db, run, "training_failed")
+        return
+
+    if is_classification_project and is_classification_dataset:
+        task_type = "classification"
+        data_path = Path(split.split_path)
+    else:
+        task_type = "detection"
+        data_path = Path(split.dataset_yaml_path)
 
     now = datetime.now(timezone.utc)
     run_dir = StoragePaths(settings.artifact_root).train_run_dir(run.project_id, run.id).resolve()
