@@ -114,8 +114,26 @@ def _classification_source_images(dataset_root: Path, class_name: str) -> list[P
     )
 
 
+def _classification_relative_image_path(
+    dataset_root: Path,
+    class_name: str,
+    source_image: Path,
+) -> Path:
+    for source_subset in CLASSIFICATION_SUBSETS:
+        class_root = dataset_root / source_subset / class_name
+        if not class_root.is_dir():
+            continue
+        try:
+            return Path(source_subset) / source_image.relative_to(class_root)
+        except ValueError:
+            continue
+
+    return source_image.relative_to(dataset_root / class_name)
+
+
 def _copy_classification_subset(
     image_paths: list[Path],
+    dataset_root: Path,
     split_root: Path,
     subset: str,
     class_name: str,
@@ -124,15 +142,17 @@ def _copy_classification_subset(
     copied_paths: list[dict[str, str]] = []
 
     for source_image in image_paths:
-        destination_image = split_root / subset / class_name / source_image.name
+        relative_image = _classification_relative_image_path(dataset_root, class_name, source_image)
+        destination_image = split_root / subset / class_name / relative_image
         destination_image.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_image, destination_image)
 
-        subset_files.append(f"{class_name}/{source_image.name}")
+        subset_files.append((Path(class_name) / relative_image).as_posix())
         copied_paths.append(
             {
                 "subset": subset,
                 "class_name": class_name,
+                "relative_image": relative_image.as_posix(),
                 "source_image": str(source_image),
                 "copied_image": str(destination_image),
             }
@@ -290,13 +310,13 @@ def create_classification_copy_split(
             test_images = shuffled_images[train_count + val_count :]
 
             class_train_files, class_train_copied_paths = _copy_classification_subset(
-                train_images, temp_root, "train", class_name
+                train_images, dataset_root, temp_root, "train", class_name
             )
             class_val_files, class_val_copied_paths = _copy_classification_subset(
-                val_images, temp_root, "val", class_name
+                val_images, dataset_root, temp_root, "val", class_name
             )
             class_test_files, class_test_copied_paths = _copy_classification_subset(
-                test_images, temp_root, "test", class_name
+                test_images, dataset_root, temp_root, "test", class_name
             )
 
             train_files.extend(class_train_files)
@@ -314,6 +334,11 @@ def create_classification_copy_split(
             "train_ratio": train_ratio,
             "val_ratio": val_ratio,
             "test_ratio": test_ratio,
+            "ratios": {
+                "train": train_ratio,
+                "val": val_ratio,
+                "test": test_ratio,
+            },
             "seed": seed,
             "train_files": train_files,
             "val_files": val_files,
@@ -321,6 +346,11 @@ def create_classification_copy_split(
             "train_count": len(train_files),
             "val_count": len(val_files),
             "test_count": len(test_files),
+            "counts": {
+                "train": len(train_files),
+                "val": len(val_files),
+                "test": len(test_files),
+            },
             "class_distribution": validation.class_distribution,
             "copied_paths": copied_paths,
         }

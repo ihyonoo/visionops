@@ -153,11 +153,51 @@ def test_create_classification_copy_split_writes_class_folder_layout(tmp_path):
     assert result.val_count == 2
     assert result.test_count == 2
     assert result.dataset_yaml_path == split_root
+    assert result.manifest_path.exists()
     assert len(list((split_root / "train" / "ok").glob("*.jpg"))) == 2
     assert len(list((split_root / "train" / "ng").glob("*.jpg"))) == 2
     assert len(list((split_root / "val" / "ok").glob("*.jpg"))) == 1
     assert len(list((split_root / "test" / "ng").glob("*.jpg"))) == 1
 
     manifest = json.loads((split_root / "split_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_dataset_root"] == str(dataset_root.resolve())
+    assert manifest["split_root"] == str(split_root.resolve())
+    assert manifest["train_ratio"] == 0.5
+    assert manifest["val_ratio"] == 0.25
+    assert manifest["test_ratio"] == 0.25
+    assert manifest["ratios"] == {"train": 0.5, "val": 0.25, "test": 0.25}
+    assert manifest["seed"] == 7
+    assert manifest["train_count"] == 4
+    assert manifest["val_count"] == 2
+    assert manifest["test_count"] == 2
+    assert manifest["counts"] == {"train": 4, "val": 2, "test": 2}
+    assert manifest["copied_paths"]
     assert manifest["class_distribution"] == {"ng": 4, "ok": 4}
     assert manifest["task_type"] == "classification"
+
+
+def test_create_classification_copy_split_preserves_duplicate_source_basenames(tmp_path):
+    from app.services.split import create_classification_copy_split
+
+    dataset_root = tmp_path / "cls"
+    for subset in ("train", "val", "test"):
+        for class_name in ("ok", "ng"):
+            _write_image(dataset_root / subset / class_name / "same.jpg")
+
+    split_root = tmp_path / "split"
+
+    result = create_classification_copy_split(
+        dataset_root=dataset_root,
+        split_root=split_root,
+        train_ratio=1.0,
+        val_ratio=0.0,
+        test_ratio=0.0,
+        seed=11,
+    )
+
+    copied_images = list(split_root.rglob("*.jpg"))
+    assert len(copied_images) == result.train_count + result.val_count + result.test_count
+    assert len(copied_images) == 6
+    assert (split_root / "train" / "ok" / "train" / "same.jpg").exists()
+    assert (split_root / "train" / "ok" / "val" / "same.jpg").exists()
+    assert (split_root / "train" / "ok" / "test" / "same.jpg").exists()
