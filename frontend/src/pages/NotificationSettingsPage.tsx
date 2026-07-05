@@ -42,7 +42,6 @@ function defaultSetting(channel: NotificationChannelName): NotificationSetting {
     last_sent_at: null,
     last_status: null,
     masked_secret: null,
-    webhook_url: null,
   };
 }
 
@@ -75,6 +74,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
   const [enabled, setEnabled] = useState(setting.enabled);
   const [events, setEvents] = useState<NotificationEvents>(setting.events);
   const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookUrlChanged, setWebhookUrlChanged] = useState(false);
   const [botToken, setBotToken] = useState("");
   const [chatId, setChatId] = useState("");
   const [isDirty, setIsDirty] = useState(false);
@@ -84,13 +84,15 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
     if (isDirty) return;
     setEnabled(setting.enabled);
     setEvents(setting.events);
-    setWebhookUrl(setting.webhook_url ?? "");
+    setWebhookUrl(setting.masked_secret ?? "");
+    setWebhookUrlChanged(false);
     setBotToken("");
     setChatId("");
   }, [isDirty, setting]);
 
-  function resetSecretDrafts() {
-    setWebhookUrl("");
+  function resetSecretDrafts(nextSetting = setting) {
+    setWebhookUrl(nextSetting.masked_secret ?? "");
+    setWebhookUrlChanged(false);
     setBotToken("");
     setChatId("");
   }
@@ -102,7 +104,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
       queryClient.setQueryData<NotificationSetting[]>(["notification-settings"], (currentSettings) =>
         replaceCachedSetting(currentSettings, updatedSetting),
       );
-      resetSecretDrafts();
+      resetSecretDrafts(updatedSetting);
       setIsDirty(false);
       setSaveBeforeTestVisible(false);
       queryClient.invalidateQueries({ queryKey: ["notification-settings"] });
@@ -154,7 +156,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
     const trimmedChatId = chatId.trim();
 
     if (setting.channel === "slack" || setting.channel === "discord") {
-      if (trimmedWebhookUrl) body.webhook_url = trimmedWebhookUrl;
+      if (webhookUrlChanged && trimmedWebhookUrl) body.webhook_url = trimmedWebhookUrl;
       return body;
     }
 
@@ -245,6 +247,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
                 onChange={(event) => {
                   setIsDirty(true);
                   setSaveBeforeTestVisible(false);
+                  setWebhookUrlChanged(true);
                   setWebhookUrl(event.target.value);
                 }}
                 placeholder={setting.has_secret ? t("notificationSettings.storedWebhook") : ""}

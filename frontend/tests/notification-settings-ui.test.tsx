@@ -81,7 +81,6 @@ const defaultSettings: NotificationSetting[] = [
     last_sent_at: null,
     last_status: null,
     masked_secret: null,
-    webhook_url: null,
   },
   {
     channel: "discord",
@@ -97,7 +96,6 @@ const defaultSettings: NotificationSetting[] = [
     last_sent_at: null,
     last_status: null,
     masked_secret: null,
-    webhook_url: null,
   },
   {
     channel: "telegram",
@@ -113,7 +111,6 @@ const defaultSettings: NotificationSetting[] = [
     last_sent_at: null,
     last_status: null,
     masked_secret: null,
-    webhook_url: null,
   },
 ];
 
@@ -258,14 +255,13 @@ describe("NotificationSettingsPage", () => {
     });
   });
 
-  it("shows a saved Slack webhook URL in the webhook input", async () => {
-    const savedWebhookUrl = "https://hooks.slack.test/services/T1/B2/C3";
+  it("shows a saved Slack webhook as a masked value in the webhook input", async () => {
+    const maskedWebhookUrl = "https://hooks.slack.test/***";
     const fetchMock = createFetchMock([
       {
         ...defaultSettings[0],
         has_secret: true,
-        masked_secret: "https://hooks.slack.test/***",
-        webhook_url: savedWebhookUrl,
+        masked_secret: maskedWebhookUrl,
       },
       defaultSettings[1],
       defaultSettings[2],
@@ -278,9 +274,50 @@ describe("NotificationSettingsPage", () => {
       const slackWebhook = container.querySelector<HTMLInputElement>(
         'input[aria-label="Slack Webhook URL"]',
       );
-      expect(slackWebhook?.value).toBe(savedWebhookUrl);
+      expect(slackWebhook?.value).toBe(maskedWebhookUrl);
       expect(slackWebhook?.type).toBe("text");
-      expect(container.textContent).not.toContain("https://hooks.slack.test/***");
+      expect(container.textContent).not.toContain(maskedWebhookUrl);
+    });
+  });
+
+  it("does not submit the masked Slack webhook when only events change", async () => {
+    const maskedWebhookUrl = "https://hooks.slack.test/***";
+    const fetchMock = createFetchMock([
+      {
+        ...defaultSettings[0],
+        has_secret: true,
+        masked_secret: maskedWebhookUrl,
+      },
+      defaultSettings[1],
+      defaultSettings[2],
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Slack");
+    });
+
+    const trainingCompleted = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Slack training_completed"]',
+    );
+    const slackSave = findButton(container, "저장");
+
+    await act(async () => {
+      trainingCompleted?.click();
+    });
+    await act(async () => {
+      slackSave?.click();
+    });
+
+    await waitForAssertion(() => {
+      const putCall = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith("/api/notification-settings/slack") && init?.method === "PUT",
+      );
+      const payload = JSON.parse(String(putCall?.[1]?.body));
+      expect(payload.webhook_url).toBeUndefined();
     });
   });
 
@@ -339,7 +376,6 @@ describe("NotificationSettingsPage", () => {
             events: JSON.parse(String(init.body)).events,
             has_secret: true,
             masked_secret: "https://hooks.slack.test/***",
-            webhook_url: "https://hooks.slack.test/services/saved",
           }),
           {
             headers: { "Content-Type": "application/json" },
@@ -381,7 +417,7 @@ describe("NotificationSettingsPage", () => {
       expect(slackEnabled?.checked).toBe(true);
       expect(
         container.querySelector<HTMLInputElement>('input[aria-label="Slack Webhook URL"]')?.value,
-      ).toBe("https://hooks.slack.test/services/saved");
+      ).toBe("https://hooks.slack.test/***");
       expect(container.textContent).not.toContain("https://hooks.slack.test/***");
     });
   });
@@ -457,7 +493,6 @@ describe("NotificationSettingsPage", () => {
         enabled: true,
         has_secret: true,
         masked_secret: "https://hooks.slack.test/***",
-        webhook_url: "https://hooks.slack.test/services/saved",
       },
       defaultSettings[1],
       defaultSettings[2],

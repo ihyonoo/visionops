@@ -79,7 +79,6 @@ def notification_setting_to_read(
         events=NotificationEvents(**events),
         has_secret=masked_secret is not None,
         masked_secret=masked_secret,
-        webhook_url=config.get("webhook_url") if channel in {"slack", "discord"} else None,
         last_status=setting.last_status if setting is not None else "unknown",
         last_error=setting.last_error if setting is not None else None,
         last_sent_at=setting.last_sent_at if setting is not None else None,
