@@ -237,6 +237,14 @@ def test_build_yolo_classification_predict_command(tmp_path):
     assert command[:3] == ["yolo", "classify", "predict"]
     assert f"model={tmp_path / 'best.pt'}" in command
     assert f"source={tmp_path / 'images'}" in command
+    assert "conf=0.25" in command
+    assert "imgsz=224" in command
+    assert f"project={tmp_path / 'runs'}" in command
+    assert "name=predict" in command
+    assert "exist_ok=True" in command
+    assert "save=True" not in command
+    assert "save_txt=True" not in command
+    assert "save_conf=True" not in command
 
 
 def test_classification_prediction_payload_from_probabilities():
