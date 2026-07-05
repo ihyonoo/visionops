@@ -118,3 +118,32 @@ def test_notification_failure_does_not_raise_or_mutate_run_state(db, monkeypatch
 
     db.refresh(run)
     assert run.status == "completed"
+
+
+def test_notification_construction_failure_does_not_raise_or_mutate_run_state(
+    db, monkeypatch
+):
+    project = Project(id="prj_4", name="Project Lookup")
+    run = TrainingRun(
+        id="trn_3",
+        project_id=project.id,
+        dataset_id="dst_3",
+        split_id="spl_3",
+        name="completed before lookup failure",
+        model_name="yolov8n",
+        status="completed",
+        metrics_summary={"mAP50": 0.77},
+        finished_at=datetime(2026, 1, 5, 3, 4, tzinfo=timezone.utc),
+    )
+    db.add_all([project, run])
+    db.commit()
+
+    def raise_project_lookup_error(db, project_id):
+        raise RuntimeError("project lookup unavailable")
+
+    monkeypatch.setattr("app.worker._project_name", raise_project_lookup_error)
+
+    notify_training_finished(db, run, "training_completed")
+
+    db.refresh(run)
+    assert run.status == "completed"

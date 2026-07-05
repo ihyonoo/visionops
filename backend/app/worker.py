@@ -98,31 +98,37 @@ def _send_notification_safely(db: Session, event: NotificationEvent) -> None:
 
 
 def notify_training_finished(db: Session, run: TrainingRun, event_type: str) -> None:
-    event = _work_notification_event(
-        event_type=event_type,
-        target_type="training",
-        target_id=run.id,
-        project_name=_project_name(db, run.project_id),
-        run_name=run.name,
-        status=run.status,
-        occurred_at=run.finished_at or datetime.now(timezone.utc),
-        summary=run.metrics_summary or {},
-    )
-    _send_notification_safely(db, event)
+    try:
+        event = _work_notification_event(
+            event_type=event_type,
+            target_type="training",
+            target_id=run.id,
+            project_name=_project_name(db, run.project_id),
+            run_name=run.name,
+            status=run.status,
+            occurred_at=run.finished_at or datetime.now(timezone.utc),
+            summary=run.metrics_summary or {},
+        )
+        _send_notification_safely(db, event)
+    except Exception:
+        db.rollback()
 
 
 def notify_inference_finished(db: Session, run: InferenceRun, event_type: str) -> None:
-    event = _work_notification_event(
-        event_type=event_type,
-        target_type="inference",
-        target_id=run.id,
-        project_name=_project_name(db, run.project_id),
-        run_name=run.name,
-        status=run.status,
-        occurred_at=run.finished_at or datetime.now(timezone.utc),
-        summary={"prediction_count": run.prediction_count},
-    )
-    _send_notification_safely(db, event)
+    try:
+        event = _work_notification_event(
+            event_type=event_type,
+            target_type="inference",
+            target_id=run.id,
+            project_name=_project_name(db, run.project_id),
+            run_name=run.name,
+            status=run.status,
+            occurred_at=run.finished_at or datetime.now(timezone.utc),
+            summary={"prediction_count": run.prediction_count},
+        )
+        _send_notification_safely(db, event)
+    except Exception:
+        db.rollback()
 
 
 def _training_config(run: TrainingRun) -> dict:
@@ -285,7 +291,6 @@ def handle_training_job(db: Session, job: Job) -> None:
         job.status = COMPLETED
         job.error_message = None
         db.commit()
-        notify_training_finished(db, run, "training_completed")
     except Exception as exc:
         db.rollback()
         run = db.get(TrainingRun, run.id)
@@ -301,6 +306,9 @@ def handle_training_job(db: Session, job: Job) -> None:
         db.commit()
         if run is not None:
             notify_training_finished(db, run, "training_failed")
+        return
+
+    notify_training_finished(db, run, "training_completed")
 
 
 JOB_HANDLERS["training"] = handle_training_job
@@ -645,7 +653,6 @@ def handle_inference_job(db: Session, job: Job) -> None:
         job.status = COMPLETED
         job.error_message = None
         db.commit()
-        notify_inference_finished(db, run, "inference_completed")
     except Exception as exc:
         db.rollback()
         run = db.get(InferenceRun, run.id)
@@ -660,6 +667,9 @@ def handle_inference_job(db: Session, job: Job) -> None:
         db.commit()
         if run is not None:
             notify_inference_finished(db, run, "inference_failed")
+        return
+
+    notify_inference_finished(db, run, "inference_completed")
 
 
 JOB_HANDLERS["inference"] = handle_inference_job
