@@ -549,12 +549,27 @@ function formatPredictionConfidence(value: number): string {
   return `${(value * 100).toFixed(1).replace(/\.?0+$/u, "")}%`;
 }
 
-function classificationRankingEntries(prediction: InferencePrediction) {
+type ClassificationRankingEntry = {
+  className: string;
+  confidence: number;
+};
+
+function classificationRankingEntries(prediction: InferencePrediction): ClassificationRankingEntry[] {
   const ranking = prediction.prediction_json.ranking;
   if (!Array.isArray(ranking)) return [];
 
   return ranking
     .filter((entry): entry is JsonObject => entry !== null && typeof entry === "object" && !Array.isArray(entry))
+    .map((entry) => ({
+      className: typeof entry.class_name === "string" ? entry.class_name.trim() : "",
+      confidence: entry.confidence,
+    }))
+    .filter(
+      (entry): entry is ClassificationRankingEntry =>
+        entry.className.length > 0 &&
+        typeof entry.confidence === "number" &&
+        Number.isFinite(entry.confidence),
+    )
     .slice(0, 5);
 }
 
@@ -3011,9 +3026,8 @@ export function ProjectDetailPage({
                                     <article className="prediction-card" key={prediction.id}>
                                       <div className="prediction-ranking">
                                         {ranking.map((entry, rankIndex) => (
-                                          <span key={`${prediction.id}-${String(entry.class_name)}-${rankIndex}`}>
-                                            {String(entry.class_name)}:{" "}
-                                            {formatPredictionConfidence(Number(entry.confidence || 0))}
+                                          <span key={`${prediction.id}-${entry.className}-${rankIndex}`}>
+                                            {entry.className}: {formatPredictionConfidence(entry.confidence)}
                                           </span>
                                         ))}
                                       </div>

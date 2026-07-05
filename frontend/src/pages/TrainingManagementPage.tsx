@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Box, CalendarClock, FolderKanban, ImageIcon, Loader2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { apiGet, apiUrl } from "../api/client";
 import { workRunsQueryRefetchInterval } from "../api/realtime";
@@ -15,7 +15,7 @@ type TrainingManagementPageProps = {
 
 type TrainingSortKey = "latest" | "oldest" | "name" | "map50" | "precision" | "recall" | "accuracy_top1";
 
-const detectionSortOptions: Array<{ key: TrainingSortKey; label?: string; labelKey?: string }> = [
+const detectionSortOptions: Array<{ key: TrainingSortKey; labelKey: string }> = [
   { key: "latest", labelKey: "trainingManagement.sortLatest" },
   { key: "oldest", labelKey: "trainingManagement.sortOldest" },
   { key: "map50", labelKey: "trainingManagement.sortMap50" },
@@ -24,10 +24,10 @@ const detectionSortOptions: Array<{ key: TrainingSortKey; label?: string; labelK
   { key: "name", labelKey: "trainingManagement.sortName" },
 ];
 
-const classificationSortOptions: Array<{ key: TrainingSortKey; label?: string; labelKey?: string }> = [
+const classificationSortOptions: Array<{ key: TrainingSortKey; labelKey: string }> = [
   { key: "latest", labelKey: "trainingManagement.sortLatest" },
   { key: "oldest", labelKey: "trainingManagement.sortOldest" },
-  { key: "accuracy_top1", label: "Top-1 accuracy" },
+  { key: "accuracy_top1", labelKey: "trainingManagement.sortAccuracyTop1" },
   { key: "name", labelKey: "trainingManagement.sortName" },
 ];
 
@@ -162,6 +162,14 @@ export function TrainingManagementPage({
   const trainingRuns = trainingRunsQuery.data ?? [];
   const isClassificationProject = projectQuery.data?.task_type === "classification";
   const sortOptions = isClassificationProject ? classificationSortOptions : detectionSortOptions;
+  const validSortKeys = useMemo(() => new Set(sortOptions.map((option) => option.key)), [sortOptions]);
+
+  useEffect(() => {
+    if (!validSortKeys.has(sortKey)) {
+      setSortKey("latest");
+    }
+  }, [isClassificationProject, projectId, sortKey, validSortKeys]);
+
   const sortedTrainingRuns = useMemo(() => {
     return [...trainingRuns].sort((left, right) => {
       if (sortKey === "name") {
@@ -225,7 +233,7 @@ export function TrainingManagementPage({
                   >
                     {sortOptions.map((option) => (
                       <option key={option.key} value={option.key}>
-                        {option.labelKey ? t(option.labelKey) : option.label}
+                        {t(option.labelKey)}
                       </option>
                     ))}
                   </select>

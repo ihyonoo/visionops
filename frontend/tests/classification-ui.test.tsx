@@ -32,11 +32,24 @@ describe("classification UI source", () => {
     expect(managementSource).toContain("accuracy_top1");
   });
 
+  it("uses localized classification sort labels and guards stale sort state", () => {
+    const managementSource = readFileSync("src/pages/TrainingManagementPage.tsx", "utf-8");
+    const i18nSource = readFileSync("src/i18n/LanguageProvider.tsx", "utf-8");
+
+    expect(managementSource).toContain('labelKey: "trainingManagement.sortAccuracyTop1"');
+    expect(managementSource).toContain("validSortKeys");
+    expect(managementSource).toContain("setSortKey(\"latest\")");
+    expect(i18nSource).toContain('"trainingManagement.sortAccuracyTop1": "Top-1 accuracy"');
+    expect(i18nSource).toContain('"trainingManagement.sortAccuracyTop1": "Top-1 정확도"');
+  });
+
   it("renders classification prediction rankings separately from detection overlays", () => {
     const source = readFileSync("src/pages/ProjectDetailPage.tsx", "utf-8");
 
     expect(source).toContain("prediction-ranking");
     expect(source).toContain("prediction.prediction_json.ranking");
     expect(source).toContain("isClassificationProject");
+    expect(source).not.toContain("String(entry.class_name)");
+    expect(source).not.toContain("Number(entry.confidence || 0)");
   });
 });
