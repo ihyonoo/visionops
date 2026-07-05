@@ -16,6 +16,7 @@ export type NotificationSetting = {
   events: NotificationEvents;
   has_secret: boolean;
   masked_secret: string | null;
+  webhook_url: string | null;
   last_status: "sent" | "failed" | string | null;
   last_error: string | null;
   last_sent_at: Timestamp | null;

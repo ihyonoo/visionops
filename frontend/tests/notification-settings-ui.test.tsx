@@ -81,6 +81,7 @@ const defaultSettings: NotificationSetting[] = [
     last_sent_at: null,
     last_status: null,
     masked_secret: null,
+    webhook_url: null,
   },
   {
     channel: "discord",
@@ -96,6 +97,7 @@ const defaultSettings: NotificationSetting[] = [
     last_sent_at: null,
     last_status: null,
     masked_secret: null,
+    webhook_url: null,
   },
   {
     channel: "telegram",
@@ -111,6 +113,7 @@ const defaultSettings: NotificationSetting[] = [
     last_sent_at: null,
     last_status: null,
     masked_secret: null,
+    webhook_url: null,
   },
 ];
 
@@ -255,6 +258,32 @@ describe("NotificationSettingsPage", () => {
     });
   });
 
+  it("shows a saved Slack webhook URL in the webhook input", async () => {
+    const savedWebhookUrl = "https://hooks.slack.test/services/T1/B2/C3";
+    const fetchMock = createFetchMock([
+      {
+        ...defaultSettings[0],
+        has_secret: true,
+        masked_secret: "https://hooks.slack.test/***",
+        webhook_url: savedWebhookUrl,
+      },
+      defaultSettings[1],
+      defaultSettings[2],
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      const slackWebhook = container.querySelector<HTMLInputElement>(
+        'input[aria-label="Slack Webhook URL"]',
+      );
+      expect(slackWebhook?.value).toBe(savedWebhookUrl);
+      expect(slackWebhook?.type).toBe("text");
+      expect(container.textContent).not.toContain("https://hooks.slack.test/***");
+    });
+  });
+
   it("asks users to save before sending a test notification", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -310,6 +339,7 @@ describe("NotificationSettingsPage", () => {
             events: JSON.parse(String(init.body)).events,
             has_secret: true,
             masked_secret: "https://hooks.slack.test/***",
+            webhook_url: "https://hooks.slack.test/services/saved",
           }),
           {
             headers: { "Content-Type": "application/json" },
@@ -349,7 +379,10 @@ describe("NotificationSettingsPage", () => {
     await waitForAssertion(() => {
       expect(settingsGetCount).toBeGreaterThan(1);
       expect(slackEnabled?.checked).toBe(true);
-      expect(container.textContent).toContain("https://hooks.slack.test/***");
+      expect(
+        container.querySelector<HTMLInputElement>('input[aria-label="Slack Webhook URL"]')?.value,
+      ).toBe("https://hooks.slack.test/services/saved");
+      expect(container.textContent).not.toContain("https://hooks.slack.test/***");
     });
   });
 
@@ -424,6 +457,7 @@ describe("NotificationSettingsPage", () => {
         enabled: true,
         has_secret: true,
         masked_secret: "https://hooks.slack.test/***",
+        webhook_url: "https://hooks.slack.test/services/saved",
       },
       defaultSettings[1],
       defaultSettings[2],

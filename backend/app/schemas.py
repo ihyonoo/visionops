@@ -214,6 +214,7 @@ class NotificationSettingRead(BaseModel):
     events: NotificationEvents
     has_secret: bool
     masked_secret: str | None
+    webhook_url: str | None = None
     last_status: str
     last_error: str | None
     last_sent_at: datetime | None

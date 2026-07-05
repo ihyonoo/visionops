@@ -14,6 +14,7 @@ def test_notification_settings_initial_state(client):
             },
             "has_secret": False,
             "masked_secret": None,
+            "webhook_url": None,
             "last_status": "unknown",
             "last_error": None,
             "last_sent_at": None,
@@ -29,6 +30,7 @@ def test_notification_settings_initial_state(client):
             },
             "has_secret": False,
             "masked_secret": None,
+            "webhook_url": None,
             "last_status": "unknown",
             "last_error": None,
             "last_sent_at": None,
@@ -44,6 +46,7 @@ def test_notification_settings_initial_state(client):
             },
             "has_secret": False,
             "masked_secret": None,
+            "webhook_url": None,
             "last_status": "unknown",
             "last_error": None,
             "last_sent_at": None,
@@ -52,11 +55,12 @@ def test_notification_settings_initial_state(client):
 
 
 def test_update_slack_setting_masks_secret(client):
+    raw_url = "https://hooks.slack.com/services/SECRET"
     response = client.put(
         "/api/notification-settings/slack",
         json={
             "enabled": True,
-            "webhook_url": "https://hooks.slack.com/services/SECRET",
+            "webhook_url": raw_url,
             "events": {
                 "training_completed": True,
                 "training_failed": False,
@@ -74,6 +78,7 @@ def test_update_slack_setting_masks_secret(client):
     assert body["has_secret"] is True
     assert body["masked_secret"].startswith("https://")
     assert "SECRET" not in body["masked_secret"]
+    assert body["webhook_url"] == raw_url
 
     unchanged_secret_response = client.put(
         "/api/notification-settings/slack",
@@ -82,6 +87,7 @@ def test_update_slack_setting_masks_secret(client):
 
     assert unchanged_secret_response.status_code == 200
     assert unchanged_secret_response.json()["masked_secret"] == body["masked_secret"]
+    assert unchanged_secret_response.json()["webhook_url"] == raw_url
 
 
 def test_update_rejects_wrong_channel_secret(client):
@@ -160,3 +166,4 @@ def test_delete_notification_setting_resets_to_default(client):
     assert discord["enabled"] is False
     assert discord["has_secret"] is False
     assert discord["masked_secret"] is None
+    assert discord["webhook_url"] is None

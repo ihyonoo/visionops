@@ -42,6 +42,7 @@ function defaultSetting(channel: NotificationChannelName): NotificationSetting {
     last_sent_at: null,
     last_status: null,
     masked_secret: null,
+    webhook_url: null,
   };
 }
 
@@ -83,7 +84,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
     if (isDirty) return;
     setEnabled(setting.enabled);
     setEvents(setting.events);
-    setWebhookUrl("");
+    setWebhookUrl(setting.webhook_url ?? "");
     setBotToken("");
     setChatId("");
   }, [isDirty, setting]);
@@ -132,6 +133,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
   });
 
   const isPending = saveSetting.isPending || testSetting.isPending || deleteSetting.isPending;
+  const showMaskedSecret = setting.channel === "telegram" && setting.masked_secret;
 
   function setEventEnabled(key: keyof NotificationEvents, checked: boolean) {
     setIsDirty(true);
@@ -183,7 +185,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
         <div className="panel__header">
           <div>
             <h2>{title}</h2>
-            {setting.masked_secret ? <p>{setting.masked_secret}</p> : null}
+            {showMaskedSecret ? <p>{setting.masked_secret}</p> : null}
           </div>
           {isPending ? <Loader2 aria-hidden="true" className="spin" size={18} /> : null}
         </div>
@@ -246,7 +248,7 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
                   setWebhookUrl(event.target.value);
                 }}
                 placeholder={setting.has_secret ? t("notificationSettings.storedWebhook") : ""}
-                type="password"
+                type="text"
                 value={webhookUrl}
               />
             </label>
