@@ -57,6 +57,22 @@ def test_masked_channel_secret_hides_short_telegram_token_and_chat_id():
     assert "CHAT" not in masked
 
 
+def test_masked_channel_secret_hides_long_telegram_token_prefix():
+    token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    masked = masked_channel_secret(
+        "telegram",
+        {
+            "bot_token": token,
+            "chat_id": "123456789",
+        },
+    )
+
+    assert masked is not None
+    assert token[:8] not in masked
+    assert token not in masked
+    assert set(masked) == {"•"}
+
+
 def test_redact_secret_removes_webhook_and_token():
     message = (
         "failed https://hooks.slack.com/services/SECRET and "

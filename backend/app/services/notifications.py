@@ -58,7 +58,9 @@ def masked_channel_secret(channel: str, config: dict) -> str | None:
     if channel in {"slack", "discord"}:
         return mask_secret(config.get("webhook_url"))
     if channel == "telegram":
-        return mask_secret(config.get("bot_token"))
+        if config.get("bot_token"):
+            return "••••••••"
+        return None
     return None
 
 
