@@ -21,7 +21,7 @@ from app.models import (
     TrainingRun,
 )
 from app.schemas import DatasetCreate, DatasetRead, DatasetUpdate
-from app.services.dataset_validation import load_class_names
+from app.services.dataset_validation import validate_classification_dataset, validate_yolo_dataset
 from app.services.ids import new_id
 from app.services.storage import StoragePaths
 
@@ -54,27 +54,22 @@ def _first_dataset_image(dataset: Dataset) -> Path | None:
     return None
 
 
-def _dataset_inventory(dataset_root: Path) -> tuple[list[str], int, int]:
-    try:
-        class_names = load_class_names(dataset_root)
-    except (FileNotFoundError, OSError, ValueError):
-        class_names = []
+def _dataset_inventory_for_project(
+    project: Project,
+    dataset_root: Path,
+) -> tuple[list[str], int, int, str, dict]:
+    if project.task_type == "classification":
+        validation = validate_classification_dataset(dataset_root)
+    else:
+        validation = validate_yolo_dataset(dataset_root)
 
-    images_root = dataset_root / "images"
-    image_count = 0
-    if images_root.is_dir():
-        image_count = sum(
-            1
-            for image_path in images_root.rglob("*")
-            if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS
-        )
-
-    labels_root = dataset_root / "labels"
-    label_count = 0
-    if labels_root.is_dir():
-        label_count = sum(1 for label_path in labels_root.rglob("*.txt") if label_path.is_file())
-
-    return class_names, image_count, label_count
+    return (
+        validation.class_names,
+        validation.image_count,
+        validation.label_count,
+        validation.status,
+        validation.to_summary(),
+    )
 
 
 @router.post("", response_model=DatasetRead, status_code=status.HTTP_201_CREATED)
@@ -83,19 +78,21 @@ def create_dataset(
     payload: DatasetCreate,
     db: Annotated[Session, Depends(get_db)],
 ) -> Dataset:
-    _require_project(db, project_id)
-    class_names, image_count, label_count = _dataset_inventory(Path(payload.source_path))
+    project = _require_project(db, project_id)
+    class_names, image_count, label_count, validation_status, validation_summary = (
+        _dataset_inventory_for_project(project, Path(payload.source_path))
+    )
     dataset = Dataset(
         id=new_id("ds"),
         project_id=project_id,
         name=payload.name,
         source_path=payload.source_path,
-        format="yolo",
+        format="yolo-classification" if project.task_type == "classification" else "yolo",
         class_names=class_names,
         image_count=image_count,
         label_count=label_count,
-        validation_status="unknown",
-        validation_summary={},
+        validation_status=validation_status,
+        validation_summary=validation_summary,
     )
     db.add(dataset)
     db.commit()
@@ -175,7 +172,12 @@ def upload_dataset(
     data_yaml: Annotated[UploadFile, File()],
     db: Annotated[Session, Depends(get_db)],
 ) -> Dataset:
-    _require_project(db, project_id)
+    project = _require_project(db, project_id)
+    if project.task_type == "classification":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Classification 데이터셋은 경로 등록을 먼저 지원합니다.",
+        )
     dataset_id = new_id("ds")
     dataset_root = _save_dataset_upload(
         project_id=project_id,
@@ -184,7 +186,9 @@ def upload_dataset(
         labels=labels,
         data_yaml=data_yaml,
     )
-    class_names, image_count, label_count = _dataset_inventory(dataset_root)
+    class_names, image_count, label_count, validation_status, validation_summary = (
+        _dataset_inventory_for_project(project, dataset_root)
+    )
 
     dataset = Dataset(
         id=dataset_id,
@@ -195,8 +199,8 @@ def upload_dataset(
         class_names=class_names,
         image_count=image_count,
         label_count=label_count,
-        validation_status="unknown",
-        validation_summary={},
+        validation_status=validation_status,
+        validation_summary=validation_summary,
     )
     try:
         db.add(dataset)

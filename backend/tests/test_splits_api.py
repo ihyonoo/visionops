@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import SessionLocal
-from app.models import DatasetSplit, TrainingRun
+from app.models import Dataset, DatasetSplit, Project, TrainingRun
 
 
 def _split_rows() -> list[DatasetSplit]:
@@ -93,6 +93,56 @@ def test_create_and_list_splits(client, tmp_path):
     assert len(splits) == 1
     assert splits[0]["id"] == body["id"]
     assert splits[0]["test_count"] == 1
+
+
+def test_create_classification_split_uses_class_folder_layout(client, tmp_path):
+    with SessionLocal() as db:
+        project = Project(
+            id="project-cls",
+            name="분류",
+            slug="classification",
+            description="",
+            task_type="classification",
+        )
+        db.add(project)
+        dataset_root = tmp_path / "cls"
+        for class_name in ("ok", "ng"):
+            class_dir = dataset_root / class_name
+            class_dir.mkdir(parents=True)
+            for index in range(2):
+                Image.new("RGB", (16, 16), color="white").save(class_dir / f"{index}.jpg")
+        dataset = Dataset(
+            id="dataset-cls",
+            project_id=project.id,
+            name="cls",
+            source_path=str(dataset_root),
+            format="yolo-classification",
+            class_names=["ng", "ok"],
+            image_count=4,
+            label_count=0,
+            validation_status="valid",
+            validation_summary={},
+        )
+        db.add(dataset)
+        db.commit()
+
+    response = client.post(
+        "/api/projects/project-cls/datasets/dataset-cls/splits",
+        json={
+            "name": "split",
+            "train_ratio": 0.5,
+            "val_ratio": 0.5,
+            "test_ratio": 0,
+            "seed": 3,
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["train_count"] == 2
+    assert body["val_count"] == 2
+    assert Path(body["dataset_yaml_path"]).is_dir()
+    assert (Path(body["split_path"]) / "train" / "ok").is_dir()
 
 
 def test_update_split_name(client, tmp_path):

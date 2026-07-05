@@ -7,7 +7,16 @@ from PIL import Image
 
 from app.core.config import settings
 from app.db import SessionLocal
-from app.models import Dataset, DatasetSplit, InferencePrediction, InferenceRun, Job, ModelArtifact, TrainingRun
+from app.models import (
+    Dataset,
+    DatasetSplit,
+    InferencePrediction,
+    InferenceRun,
+    Job,
+    ModelArtifact,
+    Project,
+    TrainingRun,
+)
 from app.services.storage import StoragePaths
 
 
@@ -40,11 +49,42 @@ def test_register_valid_dataset(client, tmp_path):
     assert re.fullmatch(r"ds_[2-9a-z]{10}", body["id"])
     assert body["project_id"] == project_id
     assert body["name"] == "line-a"
-    assert body["validation_status"] == "unknown"
-    assert body["validation_summary"] == {}
+    assert body["validation_status"] == "valid"
+    assert body["validation_summary"]["class_distribution"] == {"scratch": 1}
     assert body["class_names"] == ["scratch"]
     assert body["image_count"] == 1
     assert body["label_count"] == 1
+
+
+def test_create_classification_dataset_inventory(client, tmp_path):
+    with SessionLocal() as db:
+        project = Project(
+            id="project-cls",
+            name="분류",
+            slug="classification",
+            description="",
+            task_type="classification",
+        )
+        db.add(project)
+        db.commit()
+    for class_name in ("ok", "ng"):
+        class_dir = tmp_path / "cls" / class_name
+        class_dir.mkdir(parents=True)
+        Image.new("RGB", (16, 16), color="white").save(class_dir / f"{class_name}.jpg")
+
+    response = client.post(
+        "/api/projects/project-cls/datasets",
+        json={"name": "cls", "source_path": str(tmp_path / "cls")},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["format"] == "yolo-classification"
+    assert body["class_names"] == ["ng", "ok"]
+    assert body["image_count"] == 2
+    assert body["label_count"] == 0
+    assert body["validation_status"] == "valid"
+    assert body["validation_summary"]["class_distribution"] == {"ng": 1, "ok": 1}
 
 
 def test_upload_dataset_from_image_label_folders_and_yaml(client):
@@ -74,8 +114,8 @@ def test_upload_dataset_from_image_label_folders_and_yaml(client):
     body = response.json()
     assert re.fullmatch(r"ds_[2-9a-z]{10}", body["id"])
     assert body["name"] == "line-a-upload"
-    assert body["validation_status"] == "unknown"
-    assert body["validation_summary"] == {}
+    assert body["validation_status"] == "valid"
+    assert body["validation_summary"]["class_distribution"] == {"scratch": 1}
     assert body["class_names"] == ["scratch"]
     assert body["image_count"] == 1
     assert body["label_count"] == 1
@@ -83,6 +123,32 @@ def test_upload_dataset_from_image_label_folders_and_yaml(client):
     assert (dataset_root / "images" / "nested" / "part.jpg").is_file()
     assert (dataset_root / "labels" / "nested" / "part.txt").is_file()
     assert (dataset_root / "data.yaml").is_file()
+
+
+def test_upload_classification_dataset_returns_400(client):
+    with SessionLocal() as db:
+        project = Project(
+            id="project-cls",
+            name="분류",
+            slug="classification",
+            description="",
+            task_type="classification",
+        )
+        db.add(project)
+        db.commit()
+
+    response = client.post(
+        "/api/projects/project-cls/datasets/upload",
+        data={"name": "line-a-upload"},
+        files=[
+            ("images", ("images/part.jpg", _image_bytes(), "image/jpeg")),
+            ("labels", ("labels/part.txt", b"0 0.5 0.5 0.25 0.25\n", "text/plain")),
+            ("data_yaml", ("data.yaml", yaml.safe_dump({"names": ["scratch"]}), "text/yaml")),
+        ],
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Classification 데이터셋은 경로 등록을 먼저 지원합니다."
 
 
 def test_dataset_thumbnail_serves_first_dataset_image(client, tmp_path):
@@ -135,7 +201,7 @@ def test_list_and_get_datasets_are_scoped_to_project(client, tmp_path):
     assert scoped_get.status_code == 404
 
 
-def test_invalid_dataset_registration_is_saved_without_validation_block(client, tmp_path):
+def test_invalid_dataset_registration_is_saved_with_validation_summary(client, tmp_path):
     project_id = create_project(client)
     invalid_path = tmp_path / "invalid"
     invalid_path.mkdir()
@@ -149,8 +215,8 @@ def test_invalid_dataset_registration_is_saved_without_validation_block(client, 
     body = response.json()
     assert body["name"] == "broken"
     assert body["source_path"] == str(invalid_path)
-    assert body["validation_status"] == "unknown"
-    assert body["validation_summary"] == {}
+    assert body["validation_status"] == "invalid"
+    assert "data.yaml is required" in body["validation_summary"]["errors"]
     assert body["class_names"] == []
     assert body["image_count"] == 0
     assert body["label_count"] == 0

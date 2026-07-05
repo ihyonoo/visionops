@@ -11,7 +11,7 @@ from app.db import get_db
 from app.models import Dataset, DatasetSplit, Project, TrainingRun
 from app.schemas import DatasetSplitCreate, DatasetSplitRead, DatasetSplitUpdate
 from app.services.ids import new_id
-from app.services.split import create_copy_split
+from app.services.split import create_classification_copy_split, create_copy_split
 from app.services.storage import StoragePaths
 
 router = APIRouter(
@@ -86,12 +86,20 @@ def create_split(
             detail="train_ratio, val_ratio, test_ratio의 합은 1.0이어야 합니다.",
         )
 
-    dataset = _require_dataset(db, project_id, dataset_id)
+    project = _require_project(db, project_id)
+    dataset = db.get(Dataset, dataset_id)
+    if dataset is None or dataset.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
 
     split_id = new_id("spl")
     split_root = StoragePaths(settings.artifact_root).split_dir(project_id, dataset_id, split_id)
+    split_function = (
+        create_classification_copy_split
+        if project.task_type == "classification"
+        else create_copy_split
+    )
     try:
-        split_result = create_copy_split(
+        split_result = split_function(
             dataset_root=Path(dataset.source_path),
             split_root=split_root,
             train_ratio=payload.train_ratio,
