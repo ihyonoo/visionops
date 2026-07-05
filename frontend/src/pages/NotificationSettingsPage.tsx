@@ -51,6 +51,18 @@ function normalizeSettings(settings: NotificationSetting[] | undefined): Notific
   });
 }
 
+function replaceCachedSetting(
+  settings: NotificationSetting[] | undefined,
+  nextSetting: NotificationSetting,
+): NotificationSetting[] {
+  const currentSettings = normalizeSettings(settings);
+  return channels.map(({ channel }) =>
+    channel === nextSetting.channel
+      ? nextSetting
+      : currentSettings.find((setting) => setting.channel === channel) ?? defaultSetting(channel),
+  );
+}
+
 type NotificationChannelCardProps = {
   setting: NotificationSetting;
   title: string;
@@ -84,7 +96,10 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
   const saveSetting = useMutation({
     mutationFn: (body: NotificationSettingUpdate) =>
       apiPut<NotificationSetting>(`/api/notification-settings/${setting.channel}`, body),
-    onSuccess: () => {
+    onSuccess: (updatedSetting) => {
+      queryClient.setQueryData<NotificationSetting[]>(["notification-settings"], (currentSettings) =>
+        replaceCachedSetting(currentSettings, updatedSetting),
+      );
       resetSecretDrafts();
       setIsDirty(false);
       queryClient.invalidateQueries({ queryKey: ["notification-settings"] });
@@ -102,6 +117,9 @@ function NotificationChannelCard({ setting, title }: NotificationChannelCardProp
   const deleteSetting = useMutation({
     mutationFn: () => apiDelete(`/api/notification-settings/${setting.channel}`),
     onSuccess: () => {
+      queryClient.setQueryData<NotificationSetting[]>(["notification-settings"], (currentSettings) =>
+        replaceCachedSetting(currentSettings, defaultSetting(setting.channel)),
+      );
       setEnabled(false);
       setEvents({ ...defaultEvents });
       resetSecretDrafts();
@@ -287,6 +305,7 @@ export function NotificationSettingsPage() {
     queryKey: ["notification-settings"],
   });
   const settings = normalizeSettings(settingsQuery.data);
+  const hasSettings = settingsQuery.data !== undefined;
 
   return (
     <div className="page-stack">
@@ -300,20 +319,20 @@ export function NotificationSettingsPage() {
             {settingsQuery.isFetching ? <Loader2 aria-hidden="true" className="spin" size={18} /> : null}
           </div>
 
-          {settingsQuery.isLoading ? (
+          {settingsQuery.isLoading && !hasSettings ? (
             <div className="empty-state">
               <Loader2 aria-hidden="true" className="spin" size={22} />
               <p>{t("notificationSettings.loading")}</p>
             </div>
           ) : null}
 
-          {settingsQuery.isError ? (
+          {settingsQuery.isError && !hasSettings ? (
             <div className="notice notice--danger" role="alert">
               {t("notificationSettings.loadError")}
             </div>
           ) : null}
 
-          {!settingsQuery.isLoading && !settingsQuery.isError ? (
+          {hasSettings ? (
             <div className="project-card-grid">
               {settings.map((setting) => {
                 const channel = channels.find((item) => item.channel === setting.channel);

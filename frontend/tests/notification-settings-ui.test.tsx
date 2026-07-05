@@ -247,6 +247,76 @@ describe("NotificationSettingsPage", () => {
     });
   });
 
+  it("keeps Slack enabled after save when the follow-up settings refetch fails", async () => {
+    let settingsGetCount = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/notification-settings") && (!init?.method || init.method === "GET")) {
+        settingsGetCount += 1;
+        if (settingsGetCount === 1) {
+          return new Response(JSON.stringify(defaultSettings), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response(JSON.stringify({ detail: "refetch unavailable" }), {
+          headers: { "Content-Type": "application/json" },
+          status: 503,
+        });
+      }
+
+      if (url.endsWith("/api/notification-settings/slack") && init?.method === "PUT") {
+        return new Response(
+          JSON.stringify({
+            ...defaultSettings[0],
+            enabled: true,
+            events: JSON.parse(String(init.body)).events,
+            has_secret: true,
+            masked_secret: "https://hooks.slack.test/***",
+          }),
+          {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          },
+        );
+      }
+
+      return new Response(JSON.stringify({ detail: "not found" }), {
+        headers: { "Content-Type": "application/json" },
+        status: 404,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Slack");
+    });
+
+    const slackEnabled = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Slack 활성화"]',
+    );
+    const slackSave = findButton(container, "Slack 저장");
+
+    expect(slackEnabled).not.toBeNull();
+    expect(slackSave).not.toBeUndefined();
+
+    await act(async () => {
+      slackEnabled?.click();
+    });
+    await act(async () => {
+      slackSave?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(settingsGetCount).toBeGreaterThan(1);
+      expect(slackEnabled?.checked).toBe(true);
+      expect(container.textContent).toContain("https://hooks.slack.test/***");
+    });
+  });
+
   it("preserves an unsaved Discord webhook when Slack save refetches settings", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -307,6 +377,73 @@ describe("NotificationSettingsPage", () => {
 
     await waitForAssertion(() => {
       expect(container.textContent).toContain("Slack webhook rejected");
+    });
+  });
+
+  it("resets Slack to disabled after delete when the follow-up settings refetch fails", async () => {
+    let settingsGetCount = 0;
+    const enabledSettings: NotificationSetting[] = [
+      {
+        ...defaultSettings[0],
+        enabled: true,
+        has_secret: true,
+        masked_secret: "https://hooks.slack.test/***",
+      },
+      defaultSettings[1],
+      defaultSettings[2],
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/notification-settings") && (!init?.method || init.method === "GET")) {
+        settingsGetCount += 1;
+        if (settingsGetCount === 1) {
+          return new Response(JSON.stringify(enabledSettings), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response(JSON.stringify({ detail: "refetch unavailable" }), {
+          headers: { "Content-Type": "application/json" },
+          status: 503,
+        });
+      }
+
+      if (url.endsWith("/api/notification-settings/slack") && init?.method === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+
+      return new Response(JSON.stringify({ detail: "not found" }), {
+        headers: { "Content-Type": "application/json" },
+        status: 404,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<NotificationSettingsPage />);
+
+    await waitForAssertion(() => {
+      expect(container.querySelector<HTMLInputElement>('input[aria-label="Slack 활성화"]')?.checked).toBe(
+        true,
+      );
+    });
+
+    const slackEnabled = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Slack 활성화"]',
+    );
+    const slackDelete = findButton(container, "Slack 삭제");
+
+    expect(slackEnabled).not.toBeNull();
+    expect(slackDelete).not.toBeUndefined();
+
+    await act(async () => {
+      slackDelete?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(settingsGetCount).toBeGreaterThan(1);
+      expect(slackEnabled?.checked).toBe(false);
+      expect(container.textContent).not.toContain("https://hooks.slack.test/***");
     });
   });
 });
