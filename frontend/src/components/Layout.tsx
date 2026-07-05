@@ -453,6 +453,24 @@ export function Layout({
                     </div>
                     <LanguageControl />
                   </div>
+                  <div className="settings-panel__section">
+                    <div className="settings-panel__header">
+                      <span>{t("notificationSettings.nav")}</span>
+                    </div>
+                    <button
+                      className="settings-panel__action"
+                      data-active={activeSection === "settings-notifications" ? "true" : undefined}
+                      onClick={() => {
+                        setSettingsOpen(false);
+                        setHeaderNotice(null);
+                        onOpenNotificationSettings();
+                      }}
+                      type="button"
+                    >
+                      <Bell aria-hidden="true" size={17} />
+                      <span>{t("notificationSettings.nav")}</span>
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </div>

@@ -135,7 +135,8 @@ button {
 
 .nav-item,
 .icon-button,
-.theme-control__button {
+.theme-control__button,
+.settings-panel__action {
   min-height: 40px;
   border: 1px solid transparent;
   color: var(--muted-text);
@@ -165,7 +166,8 @@ button {
 
 .nav-item:hover,
 .icon-button:hover,
-.theme-control__button:hover {
+.theme-control__button:hover,
+.settings-panel__action:hover {
   border-color: var(--border);
   background: var(--surface-subtle);
   color: var(--text);
@@ -324,6 +326,23 @@ button {
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
+}
+
+.settings-panel__action {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.settings-panel__action[data-active="true"] {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .workspace-body {

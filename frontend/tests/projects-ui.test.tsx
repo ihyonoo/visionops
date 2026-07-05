@@ -695,6 +695,41 @@ describe("Layout", () => {
     container.remove();
   });
 
+  it("opens notification settings from the settings panel", () => {
+    const onOpenNotificationSettings = vi.fn();
+    const { container, root } = render(
+      <ThemeProvider>
+        <Layout
+          activeSection="projects"
+          onNavigate={vi.fn()}
+          onOpenNotificationSettings={onOpenNotificationSettings}
+          title="프로젝트"
+        >
+          <div />
+        </Layout>
+      </ThemeProvider>,
+    );
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='설정']")?.click();
+    });
+
+    const notificationSettingsButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".settings-panel button"),
+    ).find((button) => button.textContent?.includes("알림 설정"));
+
+    expect(notificationSettingsButton).toBeDefined();
+
+    act(() => {
+      notificationSettingsButton?.click();
+    });
+
+    expect(onOpenNotificationSettings).toHaveBeenCalledOnce();
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
   it("switches the application language from settings", () => {
     const { container, root } = render(
       <ThemeProvider>
