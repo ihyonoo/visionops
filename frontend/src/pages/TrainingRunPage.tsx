@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { Box, Clock3, FileArchive, SlidersHorizontal } from "lucide-react";
-import { useMemo } from "react";
+import { Box, Clock3, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
-import { apiGet } from "../api/client";
-import type { JsonObject, ModelArtifact, TrainingMetrics, TrainingRun } from "../api/types";
+import { apiGet, apiUrl } from "../api/client";
+import type { JsonObject, ModelArtifact, TrainingDownload, TrainingMetrics, TrainingRun } from "../api/types";
 import { LogViewer } from "../components/LogViewer";
 import { MetricChart } from "../components/MetricChart";
 import { StatusBadge } from "../components/StatusBadge";
@@ -92,11 +92,11 @@ function isFiniteNumber(value: unknown): value is number {
 
 function metricLabel(key: string): string {
   const labels: Record<string, string> = {
-    best_mAP50: "Best mAP50",
-    best_mAP50_95: "Best mAP50-95",
-    "best_mAP50-95": "Best mAP50-95",
-    best_precision: "Best Precision",
-    best_recall: "Best Recall",
+    best_mAP50: "mAP50",
+    best_mAP50_95: "mAP50-95",
+    "best_mAP50-95": "mAP50-95",
+    best_precision: "Precision",
+    best_recall: "Recall",
     last_epoch: "Last epoch",
     "metrics/mAP50(B)": "mAP50",
     "metrics/mAP50-95(B)": "mAP50-95",
@@ -153,14 +153,31 @@ function summaryMetrics(summary: JsonObject): Array<{ key: string; label: string
   return [...priorityMetrics, ...fallbackMetrics].slice(0, 4);
 }
 
-function formatConfigValue(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "-";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
+function artifactDownloadLabel(artifact: ModelArtifact): string {
+  return artifact.kind.endsWith(".pt") ? artifact.kind : `${artifact.kind}.pt`;
+}
+
+function fallbackDownloads(projectId: string, run: TrainingRun, artifacts: ModelArtifact[]): TrainingDownload[] {
+  if (!run.artifact_path) return [];
+  return [
+    {
+      filename: "results.csv",
+      kind: "metrics",
+      label: "results.csv",
+      url: `/api/projects/${projectId}/training-runs/${run.id}/results.csv`,
+    },
+    ...artifacts.map((artifact) => ({
+      filename: artifactDownloadLabel(artifact),
+      kind: `model_${artifact.kind}`,
+      label: artifactDownloadLabel(artifact),
+      url: `/api/projects/${projectId}/training-runs/${run.id}/artifacts/${artifact.id}/download`,
+    })),
+  ];
 }
 
 export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPageProps) {
   const { language, t } = useLanguage();
+  const [selectedReportImage, setSelectedReportImage] = useState<TrainingDownload | null>(null);
   const runQuery = useQuery({
     enabled: Boolean(runId),
     initialData: initialRun ?? undefined,
@@ -175,6 +192,15 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
     queryKey: ["projects", projectId, "training-runs", runId, "metrics"],
   });
 
+  const downloadsQuery = useQuery({
+    enabled: Boolean(runId),
+    queryFn: () =>
+      apiGet<TrainingDownload[]>(
+        `/api/projects/${projectId}/training-runs/${runId as string}/downloads`,
+      ),
+    queryKey: ["projects", projectId, "training-runs", runId, "downloads"],
+  });
+
   const artifactsQuery = useQuery({
     enabled: Boolean(runId),
     queryFn: () =>
@@ -187,6 +213,14 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
   const run = runQuery.data ?? initialRun ?? null;
   const rows = metricsQuery.data?.rows ?? [];
   const summary = metricsQuery.data?.summary ?? run?.metrics_summary ?? {};
+  const downloadLinks =
+    downloadsQuery.data && downloadsQuery.data.length > 0
+      ? downloadsQuery.data
+      : run
+        ? fallbackDownloads(projectId, run, artifactsQuery.data ?? [])
+        : [];
+  const downloadableLinks = downloadLinks.filter((download) => download.kind !== "report_image");
+  const reportImages = downloadLinks.filter((download) => download.kind === "report_image");
   const visibleSummaryMetrics = useMemo(() => summaryMetrics(summary), [summary]);
   const lossKeys = useMemo(
     () => orderedNumericKeys(rows, LOSS_PRIORITY_KEYS, (key) => key.toLowerCase().includes("loss")),
@@ -202,12 +236,24 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
     [rows],
   );
 
+  useEffect(() => {
+    if (!selectedReportImage) return undefined;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSelectedReportImage(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedReportImage]);
+
   if (!runId || !run) {
     return (
       <section className="panel training-detail" aria-label={t("training.detail")}>
         <div className="panel__header">
           <div>
-            <p className="section-label">{t("training.detail")}</p>
             <h2>{t("training.run")}</h2>
           </div>
         </div>
@@ -222,12 +268,11 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
     <section className="training-detail" aria-label={t("training.detail")}>
       <div className="panel training-detail__header">
         <div>
-          <p className="section-label">{t("training.detail")}</p>
           <h2>{run.name}</h2>
         </div>
         <StatusBadge status={run.status} />
         <div className="training-detail__meta">
-          <span>
+          <span className="training-detail__model">
             <Box aria-hidden="true" size={15} />
             {run.model_name}
           </span>
@@ -235,71 +280,33 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
             <Clock3 aria-hidden="true" size={15} />
             {formatElapsed(run.started_at, run.finished_at, language)}
           </span>
+          <span>{t("training.started")} {formatDateTime(run.started_at, language)}</span>
+          <span>{t("training.finished")} {formatDateTime(run.finished_at, language)}</span>
         </div>
-      </div>
-
-      <div className="metric-card-grid">
-        {visibleSummaryMetrics.length > 0 ? (
-          visibleSummaryMetrics.map((metric) => (
-            <div className="metric-card" key={metric.key}>
-              <span>{metric.label}</span>
-              <strong>{formatMetricValue(metric.value)}</strong>
-            </div>
-          ))
-        ) : (
-          <div className="metric-card metric-card--empty">
-            <span>{t("training.summaryMetrics")}</span>
-            <strong>-</strong>
-          </div>
-        )}
-      </div>
-
-      <div className="training-info-grid">
-        <div className="panel">
-          <div className="panel__header">
-            <div>
-              <p className="section-label">{t("training.timeline")}</p>
-              <h2>{t("training.elapsed")}</h2>
-            </div>
-          </div>
-          <dl className="detail-list">
-            <div>
-              <dt>{t("training.created")}</dt>
-              <dd>{formatDateTime(run.created_at, language)}</dd>
-            </div>
-            <div>
-              <dt>{t("training.started")}</dt>
-              <dd>{formatDateTime(run.started_at, language)}</dd>
-            </div>
-            <div>
-              <dt>{t("training.finished")}</dt>
-              <dd>{formatDateTime(run.finished_at, language)}</dd>
-            </div>
-          </dl>
-        </div>
-
-        <div className="panel">
-          <div className="panel__header">
-            <div>
-              <p className="section-label">Config</p>
-              <h2>Snapshot</h2>
-            </div>
-            <SlidersHorizontal aria-hidden="true" size={18} />
-          </div>
-          <dl className="config-grid">
-            {Object.entries(run.config ?? {}).map(([key, value]) => (
-              <div key={key}>
-                <dt>{key}</dt>
-                <dd>{formatConfigValue(value)}</dd>
+        <div className="training-detail__summary">
+          {visibleSummaryMetrics.length > 0 ? (
+            visibleSummaryMetrics.map((metric) => (
+              <div key={metric.key}>
+                <span>{metric.label}</span>
+                <strong>{formatMetricValue(metric.value)}</strong>
               </div>
-            ))}
-          </dl>
-          {Object.keys(run.config ?? {}).length === 0 ? (
-            <div className="empty-state empty-state--compact">
-              <p>{t("training.emptyConfig")}</p>
+            ))
+          ) : (
+            <div>
+              <span>{t("training.summaryMetrics")}</span>
+              <strong>-</strong>
             </div>
-          ) : null}
+          )}
         </div>
+        {downloadableLinks.length > 0 ? (
+          <div className="training-detail__downloads" aria-label={t("training.download")}>
+            {downloadableLinks.map((download) => (
+              <a className="secondary-button" href={apiUrl(download.url)} key={download.url}>
+                {download.label}
+              </a>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="chart-grid">
@@ -317,44 +324,66 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
         />
       </div>
 
-      <div className="panel">
-        <LogViewer projectId={projectId} runId={run.id} status={run.status} />
-      </div>
+      {reportImages.length > 0 ? (
+        <div className="panel training-report-panel">
+          <div className="panel__header">
+            <div>
+              <h2>{t("training.reportImages")}</h2>
+            </div>
+          </div>
+          <div className="training-report-grid">
+            {reportImages.map((image) => (
+              <figure className="training-report-card" key={image.url}>
+                <button
+                  aria-label={`${image.label} ${t("training.openReportImage")}`}
+                  onClick={() => setSelectedReportImage(image)}
+                  type="button"
+                >
+                  <img alt={image.label} src={apiUrl(image.url)} />
+                </button>
+                <figcaption>{image.label}</figcaption>
+              </figure>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
-      <div className="panel">
+      {selectedReportImage ? (
+        <div
+          className="modal-backdrop training-image-modal-backdrop"
+          onClick={() => setSelectedReportImage(null)}
+          role="presentation"
+        >
+          <div
+            aria-labelledby="training-report-image-title"
+            aria-modal="true"
+            className="training-image-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <div className="training-image-modal__header">
+              <h2 id="training-report-image-title">{selectedReportImage.label}</h2>
+              <button
+                aria-label={t("common.close")}
+                className="icon-button"
+                onClick={() => setSelectedReportImage(null)}
+                type="button"
+              >
+                <X aria-hidden="true" size={18} />
+              </button>
+            </div>
+            <img alt={selectedReportImage.label} src={apiUrl(selectedReportImage.url)} />
+          </div>
+        </div>
+      ) : null}
+
+      <div className="panel training-result-log-panel">
         <div className="panel__header">
           <div>
-            <p className="section-label">Models</p>
-            <h2>{t("training.modelFiles")}</h2>
+            <h2>{t("log.saved")}</h2>
           </div>
-          <FileArchive aria-hidden="true" size={18} />
         </div>
-        {(artifactsQuery.data ?? []).length > 0 ? (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>{t("training.modelKind")}</th>
-                  <th>{t("training.modelPath")}</th>
-                  <th>{t("training.created")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(artifactsQuery.data ?? []).map((artifact) => (
-                  <tr key={artifact.id}>
-                    <td>{artifact.kind}</td>
-                    <td>{artifact.path}</td>
-                    <td>{formatDateTime(artifact.created_at, language)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="empty-state empty-state--compact">
-            <p>{t("training.modelFilesEmpty")}</p>
-          </div>
-        )}
+        <LogViewer projectId={projectId} runId={run.id} status={run.status} />
       </div>
     </section>
   );

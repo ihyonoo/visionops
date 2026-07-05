@@ -2,9 +2,9 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 import json
-import uuid
 from pathlib import Path
 
+from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,7 @@ from app.models import (
     TrainingRun,
 )
 from app.services.jobs import COMPLETED, FAILED, claim_next_job, fail_job
+from app.services.ids import new_id
 from app.services.inference import run_yolo_inference
 from app.services.metrics import read_results_csv, summarize_metrics
 from app.services.storage import StoragePaths
@@ -28,6 +29,13 @@ from app.services.training import run_yolo_training
 JobHandler = Callable[[Session, Job], None]
 JOB_HANDLERS: dict[str, JobHandler] = {}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+BOX_COLORS = [
+    (0, 86, 255),
+    (0, 166, 90),
+    (255, 133, 27),
+    (147, 51, 234),
+    (220, 38, 38),
+]
 
 
 def _training_config(run: TrainingRun) -> dict:
@@ -81,7 +89,7 @@ def _register_artifact(
     )
     if artifact is None:
         artifact = ModelArtifact(
-            id=uuid.uuid4().hex,
+            id=new_id("art"),
             training_run_id=run.id,
             kind=kind,
         )
@@ -268,6 +276,7 @@ def _rendered_images(output_dir: Path) -> list[Path]:
         and path.suffix.lower() in IMAGE_EXTENSIONS
         and "labels" not in path.relative_to(output_dir).parts
         and "logs" not in path.relative_to(output_dir).parts
+        and "visionops_rendered" not in path.relative_to(output_dir).parts
     )
 
 
@@ -312,6 +321,71 @@ def _label_path_for_rendered_image(output_dir: Path, rendered_image: Path) -> Pa
     return output_dir / "labels" / f"{rendered_image.stem}.txt"
 
 
+def _render_prediction_image(
+    *,
+    image_path: Path,
+    output_dir: Path,
+    relative_image_path: Path,
+    detections: list[dict],
+) -> Path | None:
+    if not detections:
+        return None
+
+    try:
+        image = Image.open(image_path).convert("RGB")
+    except Exception:
+        return None
+
+    width, height = image.size
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=max(14, min(width, height) // 28))
+    line_width = max(2, round(min(width, height) / 180))
+
+    for detection in detections:
+        bbox = detection.get("bbox", {})
+        try:
+            x_center = float(bbox["x_center"])
+            y_center = float(bbox["y_center"])
+            box_width = float(bbox["width"])
+            box_height = float(bbox["height"])
+            class_id = int(detection.get("class_id", 0))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        left = max(0, int((x_center - box_width / 2) * width))
+        top = max(0, int((y_center - box_height / 2) * height))
+        right = min(width - 1, int((x_center + box_width / 2) * width))
+        bottom = min(height - 1, int((y_center + box_height / 2) * height))
+        if right <= left or bottom <= top:
+            continue
+
+        color = BOX_COLORS[class_id % len(BOX_COLORS)]
+        draw.rectangle((left, top, right, bottom), outline=color, width=line_width)
+
+        class_name = str(detection.get("class_name") or class_id)
+        confidence = detection.get("confidence")
+        label = (
+            f"{class_name} {float(confidence):.2f}"
+            if isinstance(confidence, int | float)
+            else class_name
+        )
+        text_box = draw.textbbox((0, 0), label, font=font)
+        text_width = text_box[2] - text_box[0]
+        text_height = text_box[3] - text_box[1]
+        label_top = max(0, top - text_height - 2 * line_width)
+        label_bottom = label_top + text_height + 2 * line_width
+        draw.rectangle(
+            (left, label_top, min(width - 1, left + text_width + 2 * line_width), label_bottom),
+            fill=color,
+        )
+        draw.text((left + line_width, label_top + line_width), label, fill=(255, 255, 255), font=font)
+
+    destination = output_dir / "visionops_rendered" / relative_image_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    image.save(destination)
+    return destination
+
+
 def _ensure_valid_inference_inputs(run: InferenceRun, artifact: ModelArtifact) -> None:
     model_path = Path(artifact.path)
     input_path = Path(run.input_path)
@@ -335,20 +409,27 @@ def _write_inference_predictions(
     input_by_relative, _input_by_name = _input_image_index(Path(run.input_path))
     recorded_inputs: set[str] = set()
 
-    def add_prediction(*, image_path: Path, output_image_path: Path, detections: list[dict], max_confidence: float) -> None:
+    def add_prediction(
+        *,
+        image_path: Path,
+        output_image_path: Path | None,
+        detections: list[dict],
+        max_confidence: float,
+    ) -> None:
+        rendered_image_path = str(output_image_path) if output_image_path is not None else ""
         prediction_json = {
             "image_path": str(image_path),
-            "output_image_path": str(output_image_path),
+            "output_image_path": rendered_image_path,
             "detections": detections,
         }
         predictions_payload.append(prediction_json)
         recorded_inputs.add(str(image_path))
         db.add(
             InferencePrediction(
-                id=uuid.uuid4().hex,
+                id=new_id("pred"),
                 inference_run_id=run.id,
                 image_path=str(image_path),
-                output_image_path=str(output_image_path),
+                output_image_path=rendered_image_path,
                 prediction_json=prediction_json,
                 class_names=class_names,
                 max_confidence=max_confidence,
@@ -360,9 +441,16 @@ def _write_inference_predictions(
             _label_path_for_rendered_image(output_dir, rendered_image),
             class_names,
         )
+        source_image_path = Path(_source_image_path(run, rendered_image))
+        visionops_rendered_image = _render_prediction_image(
+            image_path=source_image_path,
+            output_dir=output_dir,
+            relative_image_path=rendered_image.relative_to(output_dir),
+            detections=detections,
+        )
         add_prediction(
-            image_path=Path(_source_image_path(run, rendered_image)),
-            output_image_path=rendered_image,
+            image_path=source_image_path,
+            output_image_path=visionops_rendered_image,
             detections=detections,
             max_confidence=max_confidence,
         )
@@ -372,7 +460,7 @@ def _write_inference_predictions(
             continue
         add_prediction(
             image_path=image_path,
-            output_image_path=image_path,
+            output_image_path=None,
             detections=[],
             max_confidence=0.0,
         )

@@ -4,9 +4,6 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from app.services.runtime import runtime_yolo_executable
-
-
 @dataclass(frozen=True)
 class TrainingResult:
     exit_code: int
@@ -78,6 +75,8 @@ def build_yolo_train_command(
     run_parent: Path,
     run_name: str,
 ) -> list[str]:
+    run_parent = run_parent.resolve()
+    data_yaml_path = data_yaml_path.resolve()
     return [
         yolo_executable,
         "detect",
@@ -100,6 +99,8 @@ def run_yolo_training(
     run_name: str,
     yolo_executable: str | None = None,
 ) -> TrainingResult:
+    from app.services.runtime import runtime_yolo_executable
+
     run_dir = run_parent / run_name
     log_dir = run_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)

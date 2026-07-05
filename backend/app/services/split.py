@@ -15,6 +15,7 @@ from app.services.dataset_validation import IMAGE_EXTENSIONS, load_class_names
 class CopySplitResult:
     train_count: int
     val_count: int
+    test_count: int
     dataset_yaml_path: Path
     manifest_path: Path
 
@@ -99,11 +100,12 @@ def create_copy_split(
     train_ratio: float,
     val_ratio: float,
     seed: int,
+    test_ratio: float = 0.0,
 ) -> CopySplitResult:
-    if not 0 <= train_ratio <= 1 or not 0 <= val_ratio <= 1:
-        raise ValueError("train_ratio와 val_ratio는 0과 1 사이여야 합니다.")
-    if abs((train_ratio + val_ratio) - 1.0) > 1e-6:
-        raise ValueError("train_ratio와 val_ratio의 합은 1.0이어야 합니다.")
+    if not 0 <= train_ratio <= 1 or not 0 <= val_ratio <= 1 or not 0 <= test_ratio <= 1:
+        raise ValueError("train_ratio, val_ratio, test_ratio는 0과 1 사이여야 합니다.")
+    if abs((train_ratio + val_ratio + test_ratio) - 1.0) > 1e-6:
+        raise ValueError("train_ratio, val_ratio, test_ratio의 합은 1.0이어야 합니다.")
 
     dataset_root = dataset_root.resolve()
     split_root = split_root.resolve()
@@ -117,8 +119,10 @@ def create_copy_split(
     shuffled_images = image_paths[:]
     random.Random(seed).shuffle(shuffled_images)
     train_count = round(len(shuffled_images) * train_ratio)
+    val_count = round(len(shuffled_images) * val_ratio)
     train_images = shuffled_images[:train_count]
-    val_images = shuffled_images[train_count:]
+    val_images = shuffled_images[train_count : train_count + val_count]
+    test_images = shuffled_images[train_count + val_count :]
 
     split_root.parent.mkdir(parents=True, exist_ok=True)
     temp_root = Path(
@@ -131,16 +135,22 @@ def create_copy_split(
         val_files, val_copied_paths, val_label_paths = _copy_split_subset(
             val_images, dataset_root, temp_root, "val"
         )
+        test_files, test_copied_paths, test_label_paths = _copy_split_subset(
+            test_images, dataset_root, temp_root, "test"
+        )
 
         dataset_yaml_path = temp_root / "data.yaml"
+        data_yaml = {
+            "path": str(split_root),
+            "train": "images/train",
+            "val": "images/val",
+            "names": source_names,
+        }
+        if test_ratio > 0:
+            data_yaml["test"] = "images/test"
         dataset_yaml_path.write_text(
             yaml.safe_dump(
-                {
-                    "path": str(split_root),
-                    "train": "images/train",
-                    "val": "images/val",
-                    "names": source_names,
-                },
+                data_yaml,
                 sort_keys=False,
                 allow_unicode=True,
             ),
@@ -153,14 +163,17 @@ def create_copy_split(
             "split_root": str(split_root),
             "train_ratio": train_ratio,
             "val_ratio": val_ratio,
+            "test_ratio": test_ratio,
             "seed": seed,
             "train_files": train_files,
             "val_files": val_files,
+            "test_files": test_files,
             "train_count": len(train_files),
             "val_count": len(val_files),
-            "copied_paths": train_copied_paths + val_copied_paths,
+            "test_count": len(test_files),
+            "copied_paths": train_copied_paths + val_copied_paths + test_copied_paths,
             "class_distribution": _class_distribution(
-                train_label_paths + val_label_paths, class_names
+                train_label_paths + val_label_paths + test_label_paths, class_names
             ),
         }
         manifest_path.write_text(
@@ -180,6 +193,7 @@ def create_copy_split(
     return CopySplitResult(
         train_count=len(train_files),
         val_count=len(val_files),
+        test_count=len(test_files),
         dataset_yaml_path=split_root / "data.yaml",
         manifest_path=split_root / "split_manifest.json",
     )

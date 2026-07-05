@@ -1,4 +1,3 @@
-import uuid
 from pathlib import Path
 import shutil
 from typing import Annotated
@@ -21,6 +20,7 @@ from app.models import (
     TrainingRun,
 )
 from app.schemas import ProjectCreate, ProjectRead, ProjectUpdate
+from app.services.ids import new_id
 from app.services.storage import StoragePaths
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -40,7 +40,7 @@ def _first_dataset_image(dataset: Dataset) -> Path | None:
 @router.post("", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
 def create_project(payload: ProjectCreate, db: Annotated[Session, Depends(get_db)]) -> Project:
     project = Project(
-        id=uuid.uuid4().hex,
+        id=new_id("prj"),
         name=payload.name,
         description=payload.description,
         task_type="detection",

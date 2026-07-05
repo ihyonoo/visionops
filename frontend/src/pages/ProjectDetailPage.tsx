@@ -1,8 +1,32 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Database, GitBranch, Loader2, Play, Plus, X, XCircle } from "lucide-react";
-import { DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChevronDown,
+  ChevronUp,
+  CheckCircle2,
+  Database,
+  GitBranch,
+  Info,
+  Loader2,
+  MoreVertical,
+  Pencil,
+  Play,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
+import {
+  DragEvent,
+  FormEvent,
+  Fragment,
+  KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-import { apiGet, apiPost, apiUrl } from "../api/client";
+import { apiDelete, apiGet, apiPatch, apiPost, apiUrl } from "../api/client";
+import { LogViewer } from "../components/LogViewer";
 import { StatusBadge } from "../components/StatusBadge";
 import { useLanguage, type Language, type TranslationFunction } from "../i18n/LanguageProvider";
 import { TrainingRunPage } from "./TrainingRunPage";
@@ -10,12 +34,12 @@ import type {
   Dataset,
   DatasetSplit,
   DatasetSplitCreate,
+  DatasetSplitUpdate,
   InferencePrediction,
   InferenceRun,
   JsonObject,
   ModelArtifact,
   RuntimeCheck,
-  RuntimeInstallResult,
   TrainingRun,
   TrainingRunCreate,
   TrainingPreflight,
@@ -28,20 +52,6 @@ type ProjectDetailPageProps = {
   onTabChange: (tab: DetailTab) => void;
   projectId: string;
 };
-
-const detailTabs: Array<{ key: DetailTab; labelKey: string }> = [
-  { key: "datasets", labelKey: "detail.datasets" },
-  { key: "training", labelKey: "detail.training" },
-  { key: "inference", labelKey: "detail.inference" },
-];
-
-const trainingStatusFilters = [
-  { key: "all", labelKey: "projects.filterAll" },
-  { key: "queued", labelKey: "status.queued" },
-  { key: "running", labelKey: "status.running" },
-  { key: "completed", labelKey: "status.completed" },
-  { key: "failed", labelKey: "status.failed" },
-] as const;
 
 const defaultTrainingConfig = {
   batch: 16,
@@ -191,21 +201,22 @@ type DataTransferItemWithEntry = DataTransferItem & {
   webkitGetAsEntry?: () => unknown;
 };
 
-function asArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => String(item)).filter(Boolean);
-}
-
-function uploadFileName(file: UploadFileWithPath): string {
+function uploadFileName(file: UploadFileWithPath, preserveRelativePath = false): string {
   const rawPath = file.webkitRelativePath || file.name;
+  if (preserveRelativePath) return rawPath;
   const parts = rawPath.split("/").filter(Boolean);
   if (parts.length <= 1) return file.name;
   return parts.slice(1).join("/");
 }
 
-function appendFiles(formData: FormData, key: "images" | "labels" | "inputs", files: File[]) {
+function appendFiles(
+  formData: FormData,
+  key: "images" | "labels" | "inputs",
+  files: File[],
+  options: { preserveRelativePath?: boolean } = {},
+) {
   for (const file of files) {
-    formData.append(key, file, uploadFileName(file));
+    formData.append(key, file, uploadFileName(file, options.preserveRelativePath));
   }
 }
 
@@ -277,11 +288,6 @@ async function filesFromDrop(event: DragEvent<HTMLElement>): Promise<File[]> {
   return files.flat();
 }
 
-function numberFromSummary(summary: JsonObject | null | undefined, key: string): number | null {
-  const value = summary?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 function splitPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
@@ -293,19 +299,25 @@ function isFiniteRatio(value: number): boolean {
 function splitRatioError(
   trainRatio: number,
   valRatio: number,
+  testRatio: number,
   seed: number,
   t: TranslationFunction,
 ): string | null {
-  if (!isFiniteRatio(trainRatio) || !isFiniteRatio(valRatio)) {
+  if (!isFiniteRatio(trainRatio) || !isFiniteRatio(valRatio) || !isFiniteRatio(testRatio)) {
     return t("split.validationRatioBounds");
   }
-  if (Math.abs(trainRatio + valRatio - 1) > 1e-6) {
+  if (Math.abs(trainRatio + valRatio + testRatio - 1) > 1e-6) {
     return t("split.validationRatioSum");
   }
   if (!Number.isFinite(seed) || seed < 0) {
     return t("split.validationSeed");
   }
   return null;
+}
+
+function parseNumberInput(value: string): number {
+  if (!value.trim()) return Number.NaN;
+  return Number(value);
 }
 
 function isPositiveNumber(value: number): boolean {
@@ -367,17 +379,21 @@ function trainingConfigError(config: typeof defaultTrainingConfig, t: Translatio
   return null;
 }
 
-function packageLabel(packageName: string): string {
-  const labels: Record<string, string> = {
-    torch: "PyTorch",
-    torchvision: "TorchVision",
-    ultralytics: "Ultralytics",
-  };
-  return labels[packageName] ?? packageName;
-}
-
 function fileName(path: string): string {
   return path.split(/[\\/]/u).filter(Boolean).pop() ?? path;
+}
+
+function isLongInternalId(value: string): boolean {
+  return /^[a-f0-9]{24,}$/iu.test(value);
+}
+
+function shortInternalId(value: string): string {
+  return isLongInternalId(value) ? `#${value.slice(0, 8)}` : value;
+}
+
+function isManagedVisionOpsPath(path: string): boolean {
+  const normalizedPath = path.replace(/\\/gu, "/");
+  return /(?:^|\/)vision_ops_data\/projects\/[a-f0-9]{24,}(?:\/|$)/iu.test(normalizedPath);
 }
 
 function artifactOptionLabel(option: ArtifactOption): string {
@@ -389,6 +405,17 @@ function predictionDetections(prediction: InferencePrediction): JsonObject[] {
   return Array.isArray(detections)
     ? detections.filter((detection): detection is JsonObject => Boolean(detection && typeof detection === "object"))
     : [];
+}
+
+function predictionImageUrl(
+  projectId: string,
+  runId: string,
+  prediction: InferencePrediction,
+): string {
+  const cacheKey = encodeURIComponent(`${prediction.output_image_path}:${prediction.updated_at}`);
+  return apiUrl(
+    `/api/projects/${projectId}/inference-runs/${runId}/predictions/${prediction.id}/image?v=${cacheKey}`,
+  );
 }
 
 function detectionLabel(detection: JsonObject): string {
@@ -411,83 +438,6 @@ function formatDate(value: string | null | undefined, language: Language): strin
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
-}
-
-function DatasetValidationSummary({ dataset }: { dataset: Dataset | null | undefined }) {
-  const { language, t } = useLanguage();
-  if (!dataset) {
-    return (
-      <div className="empty-state empty-state--compact">
-        <Database aria-hidden="true" size={22} />
-        <p>{t("dataset.noDatasetSelected")}</p>
-      </div>
-    );
-  }
-
-  const summary = dataset.validation_summary ?? null;
-  const errors = asArray(summary?.errors);
-  const warnings = asArray(summary?.warnings);
-  const classNames = dataset.class_names?.length
-    ? dataset.class_names
-    : asArray(summary?.class_names);
-  const imageCount = dataset.image_count ?? numberFromSummary(summary, "image_count") ?? 0;
-  const labelCount = dataset.label_count ?? numberFromSummary(summary, "label_count") ?? 0;
-
-  return (
-    <div className="validation-summary">
-      <div className="metric-row">
-        <div>
-          <span>{t("dataset.images")}</span>
-          <strong>{formatCount(imageCount, language)}</strong>
-        </div>
-        <div>
-          <span>{t("dataset.labels")}</span>
-          <strong>{formatCount(labelCount, language)}</strong>
-        </div>
-        <div>
-          <span>{t("dataset.classes")}</span>
-          <strong>{formatCount(classNames.length, language)}</strong>
-        </div>
-      </div>
-
-      <div className="summary-line">
-        <span>{t("dataset.validation")}</span>
-        <StatusBadge status={dataset.validation_status} />
-      </div>
-
-      {classNames.length > 0 ? (
-        <div className="chip-list" aria-label={t("dataset.classList")}>
-          {classNames.map((className) => (
-            <span className="chip" key={className}>
-              {className}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      {errors.length > 0 ? (
-        <div className="notice notice--danger">
-          <strong>{t("dataset.errorsCount", { count: errors.length })}</strong>
-          <ul>
-            {errors.slice(0, 3).map((error) => (
-              <li key={error}>{error}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {warnings.length > 0 ? (
-        <div className="notice notice--warning">
-          <strong>{t("dataset.warningsCount", { count: warnings.length })}</strong>
-          <ul>
-            {warnings.slice(0, 3).map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-    </div>
-  );
 }
 
 function DatasetUploadPicker({
@@ -558,112 +508,83 @@ function DatasetUploadPicker({
   );
 }
 
-function RuntimePanel({
-  installRuntime,
-  runtime,
+function ParameterHelp({
+  expanded,
+  label,
+  onToggle,
 }: {
-  installRuntime: ReturnType<typeof useMutation<RuntimeInstallResult, Error, string>>;
-  runtime: RuntimeCheck | undefined;
+  expanded: boolean;
+  label: string;
+  onToggle: () => void;
 }) {
   const { t } = useLanguage();
-  if (!runtime) {
-    return (
-      <div className="runtime-panel">
-        <div className="empty-state empty-state--compact">
-          <p>{t("runtime.checking")}</p>
-        </div>
-      </div>
-    );
-  }
-
-  const trainableLabel = runtime.ready ? t("runtime.trainable") : t("runtime.notTrainable");
-
   return (
-    <div className="runtime-panel">
-      <div className="runtime-trainable" data-ready={runtime.ready ? "true" : "false"}>
-        {runtime.ready ? (
-          <CheckCircle2 aria-hidden="true" size={18} />
-        ) : (
-          <XCircle aria-hidden="true" size={18} />
-        )}
-        <span>{trainableLabel}</span>
-      </div>
-      <div className="runtime-list">
-        {Object.entries(runtime.packages).map(([packageName, packageStatus]) => (
-          <div className="runtime-row" key={packageName}>
-            <span>
-              {packageStatus.installed ? (
-                <CheckCircle2 aria-hidden="true" size={15} />
-              ) : (
-                <XCircle aria-hidden="true" size={15} />
-              )}
-              {packageLabel(packageName)}
-            </span>
-            <strong>
-              {packageStatus.installed ? packageStatus.version ?? t("runtime.installed") : t("runtime.missing")}
-            </strong>
-          </div>
-        ))}
-        <div className="runtime-row">
-          <span>
-            {runtime.yolo_cli.installed ? (
-              <CheckCircle2 aria-hidden="true" size={15} />
-            ) : (
-              <XCircle aria-hidden="true" size={15} />
-            )}
-            YOLO CLI
-          </span>
-          <strong>{runtime.yolo_cli.installed ? t("runtime.available") : t("runtime.missing")}</strong>
-        </div>
-      </div>
-      {runtime.install_required ? (
-        <div className="runtime-actions">
-          {runtime.install_options.map((option) => (
-            <button
-              className="secondary-button"
-              disabled={installRuntime.isPending}
-              key={option.profile}
-              onClick={() => installRuntime.mutate(option.profile)}
-              type="button"
-            >
-              {t("runtime.installAction", { label: option.label })}
-            </button>
-          ))}
-        </div>
+    <button
+      aria-expanded={expanded}
+      aria-label={t("help.parameter", { name: label })}
+      className="parameter-help__button"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onToggle();
+      }}
+      type="button"
+    >
+      <Info aria-hidden="true" size={14} />
+    </button>
+  );
+}
+
+function FieldLabel({ label, help }: { label: string; help: string }) {
+  const [helpOpen, setHelpOpen] = useState(false);
+  return (
+    <span className="field-label">
+      <span className="field-label__row">
+        <span className="field-label__text">{label}</span>
+        <ParameterHelp
+          expanded={helpOpen}
+          label={label}
+          onToggle={() => setHelpOpen((current) => !current)}
+        />
+      </span>
+      {helpOpen ? (
+        <span className="field-label__help" role="tooltip">
+          {help}
+        </span>
       ) : null}
-      {installRuntime.data ? (
-        <div className="notice notice--warning" role="status">
-          {installRuntime.data.message}
-        </div>
-      ) : null}
-      {installRuntime.isError ? (
-        <div className="notice notice--danger" role="alert">
-          {t("runtime.installError")}
-        </div>
-      ) : null}
-    </div>
+    </span>
   );
 }
 
 export function ProjectDetailPage({ activeTab, onTabChange, projectId }: ProjectDetailPageProps) {
   const queryClient = useQueryClient();
   const { language, t } = useLanguage();
-  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [datasetDialogOpen, setDatasetDialogOpen] = useState(false);
   const [datasetName, setDatasetName] = useState("");
+  const [datasetEditName, setDatasetEditName] = useState("");
+  const [editingDataset, setEditingDataset] = useState<Dataset | null>(null);
+  const [deletingDataset, setDeletingDataset] = useState<Dataset | null>(null);
+  const [datasetMenuId, setDatasetMenuId] = useState<string | null>(null);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [labelFiles, setLabelFiles] = useState<File[]>([]);
   const [dataYamlFiles, setDataYamlFiles] = useState<File[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
-  const [splitName, setSplitName] = useState(t("split.nameDefault"));
-  const previousSplitDefaultRef = useRef(t("split.nameDefault"));
-  const [trainRatio, setTrainRatio] = useState(0.8);
-  const [valRatio, setValRatio] = useState(0.2);
-  const [seed, setSeed] = useState(42);
+  const [expandedSplitDatasetId, setExpandedSplitDatasetId] = useState<string | null>(null);
+  const [splitDialogOpen, setSplitDialogOpen] = useState(false);
+  const [splitMenuId, setSplitMenuId] = useState<string | null>(null);
+  const [splitEditName, setSplitEditName] = useState("");
+  const [editingSplit, setEditingSplit] = useState<DatasetSplit | null>(null);
+  const [deletingSplit, setDeletingSplit] = useState<DatasetSplit | null>(null);
+  const [splitName, setSplitName] = useState("");
+  const [trainRatioInput, setTrainRatioInput] = useState("");
+  const [valRatioInput, setValRatioInput] = useState("");
+  const [testRatioInput, setTestRatioInput] = useState("");
+  const [seedInput, setSeedInput] = useState("");
   const [pendingDatasetId, setPendingDatasetId] = useState<string | null>(null);
-  const [trainingStatusFilter, setTrainingStatusFilter] =
-    useState<(typeof trainingStatusFilters)[number]["key"]>("all");
+  const [trainingDrawerOpen, setTrainingDrawerOpen] = useState(false);
+  const [advancedTrainingOpen, setAdvancedTrainingOpen] = useState(false);
   const [selectedTrainingRunId, setSelectedTrainingRunId] = useState<string | null>(null);
+  const [trainingResultRunId, setTrainingResultRunId] = useState<string | null>(null);
   const [trainingName, setTrainingName] = useState("");
   const [trainingSplitId, setTrainingSplitId] = useState("");
   const [trainingModelName, setTrainingModelName] = useState("yolo11n");
@@ -671,24 +592,32 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   const [trainingConfig, setTrainingConfig] = useState(defaultTrainingConfig);
   const [preflightResult, setPreflightResult] = useState<TrainingPreflight | null>(null);
   const [inferenceName, setInferenceName] = useState("");
+  const [inferenceDialogOpen, setInferenceDialogOpen] = useState(false);
   const [inferenceArtifactId, setInferenceArtifactId] = useState("");
+  const [expandedInferenceRunId, setExpandedInferenceRunId] = useState<string | null>(null);
   const [selectedInferenceRunId, setSelectedInferenceRunId] = useState<string | null>(null);
   const [inferenceInputType, setInferenceInputType] = useState<"image" | "folder">("folder");
   const [inferenceFiles, setInferenceFiles] = useState<File[]>([]);
   const [inferenceConfig, setInferenceConfig] = useState(defaultInferenceConfig);
-  const ratioError = splitRatioError(trainRatio, valRatio, seed, t);
+  const trainRatio = parseNumberInput(trainRatioInput);
+  const valRatio = parseNumberInput(valRatioInput);
+  const testRatio = parseNumberInput(testRatioInput);
+  const seed = parseNumberInput(seedInput);
+  const splitFormComplete =
+    Boolean(splitName.trim()) &&
+    Boolean(trainRatioInput.trim()) &&
+    Boolean(valRatioInput.trim()) &&
+    Boolean(testRatioInput.trim()) &&
+    Boolean(seedInput.trim());
+  const ratioError = splitFormComplete
+    ? splitRatioError(trainRatio, valRatio, testRatio, seed, t)
+    : t("split.validationRequired");
   const configError = trainingConfigError(trainingConfig, t);
   const trainingNameError = trainingName.trim() ? null : t("training.nameRequired");
   const splitSelectionError = trainingSplitId ? null : t("training.splitRequired");
   const trainingFormError = trainingNameError ?? splitSelectionError ?? configError;
-
-  useEffect(() => {
-    const nextDefault = t("split.nameDefault");
-    setSplitName((currentName) =>
-      currentName === previousSplitDefaultRef.current ? nextDefault : currentName,
-    );
-    previousSplitDefaultRef.current = nextDefault;
-  }, [t]);
+  const trainingCommandPreview = preflightResult?.command_preview;
+  const canStartAfterCommandPreview = Boolean(preflightResult?.can_start && trainingCommandPreview);
 
   const datasetsQuery = useQuery({
     queryFn: () => apiGet<Dataset[]>(`/api/projects/${projectId}/datasets`),
@@ -766,6 +695,51 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     },
   });
 
+  const updateDataset = useMutation({
+    mutationFn: ({ body, id }: { body: { name: string }; id: string }) =>
+      apiPatch<Dataset>(`/api/projects/${projectId}/datasets/${id}`, body),
+    onSuccess: (dataset) => {
+      setEditingDataset(null);
+      setDatasetEditName("");
+      setDatasetMenuId(null);
+      queryClient.setQueryData<Dataset[]>(
+        ["projects", projectId, "datasets"],
+        (currentDatasets = []) =>
+          currentDatasets.map((currentDataset) =>
+            currentDataset.id === dataset.id ? dataset : currentDataset,
+          ),
+      );
+      queryClient.setQueryData(["projects", projectId, "datasets", dataset.id], dataset);
+      queryClient.invalidateQueries({ queryKey: ["projects", projectId, "datasets"] });
+      queryClient.invalidateQueries({ queryKey: ["projects", projectId, "datasets", dataset.id] });
+    },
+  });
+
+  const deleteDataset = useMutation({
+    mutationFn: (datasetId: string) =>
+      apiDelete(`/api/projects/${projectId}/datasets/${datasetId}`),
+    onSuccess: (_result, datasetId) => {
+      setDeletingDataset(null);
+      setDatasetMenuId(null);
+      queryClient.setQueryData<Dataset[]>(
+        ["projects", projectId, "datasets"],
+        (currentDatasets = []) =>
+          currentDatasets.filter((currentDataset) => currentDataset.id !== datasetId),
+      );
+      queryClient.removeQueries({ queryKey: ["projects", projectId, "datasets", datasetId] });
+      queryClient.removeQueries({
+        queryKey: ["projects", projectId, "datasets", datasetId, "splits"],
+      });
+      if (selectedDatasetId === datasetId) {
+        setSelectedDatasetId(null);
+      }
+      if (expandedSplitDatasetId === datasetId) {
+        setExpandedSplitDatasetId(null);
+      }
+      queryClient.invalidateQueries({ queryKey: ["projects", projectId, "datasets"] });
+    },
+  });
+
   const createSplit = useMutation({
     mutationFn: (body: DatasetSplitCreate) =>
       apiPost<DatasetSplit>(
@@ -773,8 +747,65 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
         body,
       ),
     onSuccess: () => {
+      setSplitDialogOpen(false);
+      setSplitName("");
+      setTrainRatioInput("");
+      setValRatioInput("");
+      setTestRatioInput("");
+      setSeedInput("");
       queryClient.invalidateQueries({
         queryKey: ["projects", projectId, "datasets", selectedDatasetId, "splits"],
+      });
+    },
+  });
+
+  const updateSplit = useMutation({
+    mutationFn: ({
+      body,
+      datasetId,
+      id,
+    }: {
+      body: DatasetSplitUpdate;
+      datasetId: string;
+      id: string;
+    }) =>
+      apiPatch<DatasetSplit>(
+        `/api/projects/${projectId}/datasets/${datasetId}/splits/${id}`,
+        body,
+      ),
+    onSuccess: (split) => {
+      setEditingSplit(null);
+      setSplitEditName("");
+      setSplitMenuId(null);
+      queryClient.setQueryData<DatasetSplit[]>(
+        ["projects", projectId, "datasets", split.dataset_id, "splits"],
+        (currentSplits = []) =>
+          currentSplits.map((currentSplit) =>
+            currentSplit.id === split.id ? split : currentSplit,
+          ),
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "datasets", split.dataset_id, "splits"],
+      });
+    },
+  });
+
+  const deleteSplit = useMutation({
+    mutationFn: (split: DatasetSplit) =>
+      apiDelete(`/api/projects/${projectId}/datasets/${split.dataset_id}/splits/${split.id}`),
+    onSuccess: (_result, split) => {
+      setDeletingSplit(null);
+      setSplitMenuId(null);
+      queryClient.setQueryData<DatasetSplit[]>(
+        ["projects", projectId, "datasets", split.dataset_id, "splits"],
+        (currentSplits = []) =>
+          currentSplits.filter((currentSplit) => currentSplit.id !== split.id),
+      );
+      if (trainingSplitId === split.id) {
+        setTrainingSplitId("");
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "datasets", split.dataset_id, "splits"],
       });
     },
   });
@@ -799,12 +830,15 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       trainingSplitQueries.flatMap((query, index) => {
         const dataset = visibleDatasets[index];
         return (query.data ?? []).map((split) => ({
+          datasetId: dataset?.id ?? split.dataset_id,
           datasetName: dataset?.name ?? t("dataset.dataset"),
           split,
         }));
       }),
     [t, trainingSplitQueries, visibleDatasets],
   );
+  const selectedTrainingSplitOption =
+    trainingSplitOptions.find((option) => option.split.id === trainingSplitId) ?? null;
 
   const trainingRunsQuery = useQuery({
     enabled: activeTab === "training" || activeTab === "inference",
@@ -847,29 +881,41 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   const inferenceRuns = inferenceRunsQuery.data ?? [];
   const selectedInferenceRun =
     inferenceRuns.find((run) => run.id === selectedInferenceRunId) ?? inferenceRuns[0] ?? null;
-  const inferencePredictionsQuery = useQuery({
-    enabled: activeTab === "inference" && Boolean(selectedInferenceRun),
-    queryFn: () =>
-      apiGet<InferencePrediction[]>(
-        `/api/projects/${projectId}/inference-runs/${selectedInferenceRun?.id as string}/predictions`,
-      ),
-    queryKey: ["projects", projectId, "inference-runs", selectedInferenceRun?.id, "predictions"],
-    refetchInterval:
-      selectedInferenceRun?.status === "queued" || selectedInferenceRun?.status === "running"
-        ? 2000
-        : false,
+  const inferencePredictionQueries = useQueries({
+    queries: inferenceRuns.map((run) => ({
+      enabled: activeTab === "inference",
+      queryFn: () =>
+        apiGet<InferencePrediction[]>(
+          `/api/projects/${projectId}/inference-runs/${run.id}/predictions`,
+        ),
+      queryKey: ["projects", projectId, "inference-runs", run.id, "predictions"],
+      refetchInterval: run.status === "queued" || run.status === "running" ? 2000 : false,
+    })),
   });
-  const inferencePredictions = inferencePredictionsQuery.data ?? [];
-  const filteredTrainingRuns = trainingRuns.filter((run) =>
-    trainingStatusFilter === "all"
-      ? true
-      : trainingStatusFilter === "queued"
-        ? run.status === "queued" || run.status === "pending"
-        : run.status === trainingStatusFilter,
+  const inferencePredictionsByRunId = useMemo(() => {
+    const predictions = new Map<string, InferencePrediction[]>();
+    inferenceRuns.forEach((run, index) => {
+      predictions.set(run.id, inferencePredictionQueries[index]?.data ?? []);
+    });
+    return predictions;
+  }, [inferencePredictionQueries, inferenceRuns]);
+  const prioritizedTrainingRuns = useMemo(
+    () =>
+      [...trainingRuns].sort((left, right) => {
+        const leftActive = left.status === "queued" || left.status === "pending" || left.status === "running";
+        const rightActive = right.status === "queued" || right.status === "pending" || right.status === "running";
+        if (leftActive !== rightActive) return leftActive ? -1 : 1;
+        return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
+      }),
+    [trainingRuns],
+  );
+  const selectedSplitTrainingRuns = useMemo(
+    () => prioritizedTrainingRuns.filter((run) => run.split_id === trainingSplitId),
+    [prioritizedTrainingRuns, trainingSplitId],
   );
   const selectedTrainingRun =
-    filteredTrainingRuns.find((run) => run.id === selectedTrainingRunId) ??
-    filteredTrainingRuns[0] ??
+    selectedSplitTrainingRuns.find((run) => run.id === selectedTrainingRunId) ??
+    selectedSplitTrainingRuns[0] ??
     null;
 
   useEffect(() => {
@@ -882,14 +928,14 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   useEffect(() => {
     if (!trainingRunsQuery.data) return;
     const nextTrainingRun =
-      filteredTrainingRuns.find((run) => run.id === selectedTrainingRunId) ??
-      filteredTrainingRuns[0] ??
+      selectedSplitTrainingRuns.find((run) => run.id === selectedTrainingRunId) ??
+      selectedSplitTrainingRuns[0] ??
       null;
     if (nextTrainingRun?.id === selectedTrainingRunId) {
       return;
     }
     setSelectedTrainingRunId(nextTrainingRun?.id ?? null);
-  }, [filteredTrainingRuns, selectedTrainingRunId, trainingRunsQuery.data]);
+  }, [selectedSplitTrainingRuns, selectedTrainingRunId, trainingRunsQuery.data]);
 
   useEffect(() => {
     if (inferenceArtifactId && artifactOptions.some((option) => option.artifact.id === inferenceArtifactId)) {
@@ -910,9 +956,11 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     mutationFn: (body: TrainingRunCreate) =>
       apiPost<TrainingRun>(`/api/projects/${projectId}/training-runs`, body),
     onSuccess: (run) => {
-      setTrainingStatusFilter("all");
       setSelectedTrainingRunId(run.id);
       setTrainingName("");
+      setTrainingDrawerOpen(false);
+      setAdvancedTrainingOpen(false);
+      setPreflightResult(null);
       queryClient.setQueryData<TrainingRun[]>(
         ["projects", projectId, "training-runs"],
         (currentRuns = []) => [run, ...currentRuns.filter((currentRun) => currentRun.id !== run.id)],
@@ -927,25 +975,40 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       apiPost<TrainingPreflight>(`/api/projects/${projectId}/training-runs/preflight`, body),
   });
 
-  const installRuntime = useMutation({
-    mutationFn: (profile: string) =>
-      apiPost<RuntimeInstallResult>("/api/runtime/install", { profile }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["runtime", "check"] });
-    },
-  });
-
   const createInferenceRun = useMutation({
     mutationFn: (body: FormData) =>
       apiPost<InferenceRun>(`/api/projects/${projectId}/inference-runs/upload`, body),
     onSuccess: (run) => {
       setInferenceName("");
       setInferenceFiles([]);
+      setInferenceDialogOpen(false);
+      setExpandedInferenceRunId(run.id);
       setSelectedInferenceRunId(run.id);
       queryClient.setQueryData<InferenceRun[]>(
         ["projects", projectId, "inference-runs"],
         (currentRuns = []) => [run, ...currentRuns.filter((currentRun) => currentRun.id !== run.id)],
       );
+      queryClient.invalidateQueries({ queryKey: ["projects", projectId, "inference-runs"] });
+    },
+  });
+
+  const deleteInferenceRun = useMutation({
+    mutationFn: (run: InferenceRun) =>
+      apiDelete(`/api/projects/${projectId}/inference-runs/${run.id}`),
+    onSuccess: (_result, run) => {
+      queryClient.setQueryData<InferenceRun[]>(
+        ["projects", projectId, "inference-runs"],
+        (currentRuns = []) => currentRuns.filter((currentRun) => currentRun.id !== run.id),
+      );
+      queryClient.removeQueries({
+        queryKey: ["projects", projectId, "inference-runs", run.id, "predictions"],
+      });
+      if (selectedInferenceRunId === run.id) {
+        setSelectedInferenceRunId(null);
+      }
+      if (expandedInferenceRunId === run.id) {
+        setExpandedInferenceRunId(null);
+      }
       queryClient.invalidateQueries({ queryKey: ["projects", projectId, "inference-runs"] });
     },
   });
@@ -963,6 +1026,32 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     setLabelFiles([]);
     setDataYamlFiles([]);
     createDataset.reset();
+  }
+
+  function openDatasetEditDialog(dataset: Dataset) {
+    updateDataset.reset();
+    setDatasetMenuId(null);
+    setEditingDataset(dataset);
+    setDatasetEditName(dataset.name);
+  }
+
+  function closeDatasetEditDialog() {
+    if (updateDataset.isPending) return;
+    setEditingDataset(null);
+    setDatasetEditName("");
+    updateDataset.reset();
+  }
+
+  function openDatasetDeleteDialog(dataset: Dataset) {
+    deleteDataset.reset();
+    setDatasetMenuId(null);
+    setDeletingDataset(dataset);
+  }
+
+  function closeDatasetDeleteDialog() {
+    if (deleteDataset.isPending) return;
+    setDeletingDataset(null);
+    deleteDataset.reset();
   }
 
   function handleDatasetSubmit(event: FormEvent<HTMLFormElement>) {
@@ -987,6 +1076,66 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     createDataset.mutate(formData);
   }
 
+  function handleDatasetEditSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedName = datasetEditName.trim();
+    if (!editingDataset || !trimmedName || updateDataset.isPending) return;
+    updateDataset.mutate({
+      body: { name: trimmedName },
+      id: editingDataset.id,
+    });
+  }
+
+  function handleDatasetDeleteConfirm() {
+    if (!deletingDataset || deleteDataset.isPending) return;
+    deleteDataset.mutate(deletingDataset.id);
+  }
+
+  function openSplitDialog(datasetId: string) {
+    createSplit.reset();
+    setPendingDatasetId(null);
+    setSelectedDatasetId(datasetId);
+    setExpandedSplitDatasetId(datasetId);
+    setSplitDialogOpen(true);
+  }
+
+  function closeSplitDialog() {
+    if (createSplit.isPending) return;
+    setSplitDialogOpen(false);
+    setSplitName("");
+    setTrainRatioInput("");
+    setValRatioInput("");
+    setTestRatioInput("");
+    setSeedInput("");
+    createSplit.reset();
+  }
+
+  function openSplitEditDialog(split: DatasetSplit) {
+    updateSplit.reset();
+    setSplitMenuId(null);
+    setSplitEditName(split.name);
+    setEditingSplit(split);
+  }
+
+  function closeSplitEditDialog() {
+    if (updateSplit.isPending) return;
+    setEditingSplit(null);
+    setSplitEditName("");
+    updateSplit.reset();
+  }
+
+  function openSplitDeleteDialog(split: DatasetSplit) {
+    deleteSplit.reset();
+    setSplitMenuId(null);
+    setDeletingSplit(split);
+  }
+
+  function closeSplitDeleteDialog() {
+    if (deleteSplit.isPending) return;
+    setDeletingSplit(null);
+    deleteSplit.reset();
+  }
+
   function handleSplitSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedName = splitName.trim();
@@ -997,7 +1146,87 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       seed,
       train_ratio: trainRatio,
       val_ratio: valRatio,
+      test_ratio: testRatio,
     });
+  }
+
+  function handleSplitEditSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedName = splitEditName.trim();
+    if (!editingSplit || !trimmedName || updateSplit.isPending) return;
+    updateSplit.mutate({
+      body: { name: trimmedName },
+      datasetId: editingSplit.dataset_id,
+      id: editingSplit.id,
+    });
+  }
+
+  function handleSplitDeleteConfirm() {
+    if (!deletingSplit || deleteSplit.isPending) return;
+    deleteSplit.mutate(deletingSplit);
+  }
+
+  function openTrainingDrawer() {
+    if (!selectedTrainingSplitOption) return;
+    createTrainingRun.reset();
+    runTrainingPreflight.reset();
+    setPreflightResult(null);
+    setTrainingDrawerOpen(true);
+  }
+
+  function closeTrainingDrawer() {
+    if (createTrainingRun.isPending || runTrainingPreflight.isPending) return;
+    setTrainingDrawerOpen(false);
+    setAdvancedTrainingOpen(false);
+  }
+
+  function clearTrainingCommandPreview() {
+    if (preflightResult !== null) {
+      setPreflightResult(null);
+    }
+    runTrainingPreflight.reset();
+  }
+
+  function selectTrainingSplit(datasetId: string, splitId: string) {
+    clearTrainingCommandPreview();
+    setSelectedDatasetId(datasetId);
+    setExpandedSplitDatasetId(datasetId);
+    setTrainingSplitId(splitId);
+  }
+
+  function startTrainingFromSplit(datasetId: string, splitId: string) {
+    selectTrainingSplit(datasetId, splitId);
+    createTrainingRun.reset();
+    runTrainingPreflight.reset();
+    setPreflightResult(null);
+    setTrainingDrawerOpen(true);
+    onTabChange("training");
+  }
+
+  function openInferenceDialog() {
+    createInferenceRun.reset();
+    setInferenceDialogOpen(true);
+  }
+
+  function closeInferenceDialog() {
+    if (createInferenceRun.isPending) return;
+    setInferenceDialogOpen(false);
+    createInferenceRun.reset();
+  }
+
+  function inferenceInputTypeLabel(run: InferenceRun): string {
+    return run.input_type === "image" ? t("inference.image") : t("inference.folder");
+  }
+
+  function datasetSourceSummary(dataset: Dataset): string {
+    return isManagedVisionOpsPath(dataset.source_path) ? t("dataset.managedSource") : dataset.source_path;
+  }
+
+  function inferenceInputSummary(run: InferenceRun): string {
+    if (run.input_type === "folder" && isManagedVisionOpsPath(run.input_path)) {
+      return t("inference.uploadedFolder");
+    }
+    return fileName(run.input_path);
   }
 
   function handleInferenceSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1018,7 +1247,9 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     formData.append("input_type", inferenceInputType);
     formData.append("conf", String(inferenceConfig.conf));
     formData.append("imgsz", String(inferenceConfig.imgsz));
-    appendFiles(formData, "inputs", inferenceFiles);
+    appendFiles(formData, "inputs", inferenceFiles, {
+      preserveRelativePath: inferenceInputType === "folder",
+    });
     createInferenceRun.mutate(formData);
   }
 
@@ -1033,16 +1264,19 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       name: trimmedName,
       split_id: trainingSplitId,
     };
+    if (canStartAfterCommandPreview) {
+      createTrainingRun.mutate(body);
+      return;
+    }
     const preflight = await runTrainingPreflight.mutateAsync(body);
     setPreflightResult(preflight);
-    if (!preflight.can_start) return;
-    createTrainingRun.mutate(body);
   }
 
   function updateTrainingConfig<Key extends keyof typeof defaultTrainingConfig>(
     key: Key,
     value: (typeof defaultTrainingConfig)[Key],
   ) {
+    clearTrainingCommandPreview();
     setTrainingConfig((currentConfig) => ({
       ...currentConfig,
       [key]: value,
@@ -1064,6 +1298,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   function applyTrainingPreset(presetKey: TrainingPresetKey) {
     const preset = trainingPresetOptions.find((option) => option.key === presetKey);
     if (!preset) return;
+    clearTrainingCommandPreview();
     setTrainingPreset(presetKey);
     setTrainingConfig((currentConfig) => ({
       ...currentConfig,
@@ -1087,55 +1322,21 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     setSelectedDatasetId(datasetId);
   }
 
-  function moveTabFocus(nextIndex: number) {
-    onTabChange(detailTabs[nextIndex].key);
-    window.requestAnimationFrame(() => tabRefs.current[nextIndex]?.focus());
+  function toggleDatasetSplits(datasetId: string) {
+    setPendingDatasetId(null);
+    setSelectedDatasetId(datasetId);
+    setExpandedSplitDatasetId((currentId) => (currentId === datasetId ? null : datasetId));
+  }
+
+  function handleDatasetRowKeyDown(event: KeyboardEvent<HTMLElement>, datasetId: string) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      handleSelectDataset(datasetId);
+    }
   }
 
   return (
     <div className="page-stack">
-      <div className="tab-bar" role="tablist" aria-label={t("project.detailFallback")}>
-        {detailTabs.map((tab, index) => (
-          <button
-            aria-controls={`${tab.key}-panel`}
-            aria-selected={activeTab === tab.key}
-            className="tab-button"
-            id={`${tab.key}-tab`}
-            key={tab.key}
-            onKeyDown={(event) => {
-              if (
-                event.key !== "ArrowLeft" &&
-                event.key !== "ArrowRight" &&
-                event.key !== "Home" &&
-                event.key !== "End"
-              ) {
-                return;
-              }
-              event.preventDefault();
-              if (event.key === "Home") {
-                moveTabFocus(0);
-                return;
-              }
-              if (event.key === "End") {
-                moveTabFocus(detailTabs.length - 1);
-                return;
-              }
-              const direction = event.key === "ArrowRight" ? 1 : -1;
-              moveTabFocus((index + direction + detailTabs.length) % detailTabs.length);
-            }}
-            onClick={() => onTabChange(tab.key)}
-            ref={(element) => {
-              tabRefs.current[index] = element;
-            }}
-            role="tab"
-            tabIndex={activeTab === tab.key ? 0 : -1}
-            type="button"
-          >
-            {t(tab.labelKey)}
-          </button>
-        ))}
-      </div>
-
       {activeTab === "datasets" ? (
         <section
           aria-labelledby="datasets-tab"
@@ -1146,7 +1347,6 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
           <div className="panel panel--wide">
             <div className="panel__header">
               <div>
-                <p className="section-label">{t("detail.datasets")}</p>
                 <h2>{t("dataset.list")}</h2>
               </div>
               <div className="panel__actions">
@@ -1159,36 +1359,209 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
             </div>
 
             <div className="dataset-list">
-              {visibleDatasets.map((dataset) => (
-                <button
-                  className="dataset-row"
-                  data-selected={selectedDatasetId === dataset.id ? "true" : undefined}
-                  key={dataset.id}
-                  onClick={() => handleSelectDataset(dataset.id)}
-                  type="button"
-                >
-                  <span className="dataset-row__thumbnail" aria-hidden="true">
-                    {dataset.image_count > 0 ? (
-                      <img
-                        alt=""
-                        data-dataset-thumbnail={dataset.id}
-                        loading="lazy"
-                        onError={(event) => {
-                          event.currentTarget.hidden = true;
-                        }}
-                        src={apiUrl(`/api/projects/${projectId}/datasets/${dataset.id}/thumbnail`)}
-                      />
-                    ) : (
-                      <Database aria-hidden="true" size={18} />
-                    )}
-                  </span>
-                  <span className="dataset-row__content">
-                    <strong>{dataset.name}</strong>
-                    <small>{dataset.source_path}</small>
-                  </span>
-                  <StatusBadge status={dataset.validation_status} />
-                </button>
-              ))}
+              {visibleDatasets.map((dataset, index) => {
+                const datasetSplits = trainingSplitQueries[index]?.data ?? [];
+                const isSelectedDataset = selectedDatasetId === dataset.id;
+                const isSplitExpanded = expandedSplitDatasetId === dataset.id;
+
+                return (
+                  <Fragment key={dataset.id}>
+                    <article
+                      aria-label={dataset.name}
+                      aria-selected={isSelectedDataset}
+                      className="dataset-row"
+                      data-expanded={isSplitExpanded ? "true" : undefined}
+                      data-selected={isSelectedDataset ? "true" : undefined}
+                      onClick={() => handleSelectDataset(dataset.id)}
+                      onKeyDown={(event) => handleDatasetRowKeyDown(event, dataset.id)}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      <span className="dataset-row__thumbnail" aria-hidden="true">
+                        {dataset.image_count > 0 ? (
+                          <img
+                            alt=""
+                            data-dataset-thumbnail={dataset.id}
+                            loading="lazy"
+                            onError={(event) => {
+                              event.currentTarget.hidden = true;
+                            }}
+                            src={apiUrl(`/api/projects/${projectId}/datasets/${dataset.id}/thumbnail`)}
+                          />
+                        ) : (
+                          <Database aria-hidden="true" size={18} />
+                        )}
+                      </span>
+                      <span className="dataset-row__content">
+                        <strong>{dataset.name}</strong>
+                        <small title={dataset.source_path}>{datasetSourceSummary(dataset)}</small>
+                        <span className="dataset-row__meta">
+                          <span>
+                            {t("dataset.images")} {formatCount(dataset.image_count, language)}
+                          </span>
+                          <span>
+                            {t("dataset.labels")} {formatCount(dataset.label_count, language)}
+                          </span>
+                          <span>
+                            {t("dataset.classes")} {formatCount(dataset.class_names.length, language)}
+                          </span>
+                        </span>
+                        {dataset.class_names.length > 0 ? (
+                          <span className="dataset-row__classes" aria-label={t("dataset.classList")}>
+                            {dataset.class_names.map((className) => (
+                              <span className="dataset-row__class-chip" key={className}>
+                                {className}
+                              </span>
+                            ))}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="dataset-row__actions">
+                        <span className="dataset-row__menu">
+                          <button
+                            aria-expanded={datasetMenuId === dataset.id}
+                            aria-label={t("dataset.actions", { name: dataset.name })}
+                            className="dataset-row__menu-button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setDatasetMenuId((currentId) =>
+                                currentId === dataset.id ? null : dataset.id,
+                              );
+                            }}
+                            type="button"
+                          >
+                            <MoreVertical aria-hidden="true" size={18} />
+                          </button>
+                          {datasetMenuId === dataset.id ? (
+                            <span
+                              className="dataset-row__menu-popover"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <button onClick={() => openDatasetEditDialog(dataset)} type="button">
+                                <Pencil aria-hidden="true" size={15} />
+                                <span>{t("projects.rename")}</span>
+                              </button>
+                              <button onClick={() => openDatasetDeleteDialog(dataset)} type="button">
+                                <Trash2 aria-hidden="true" size={15} />
+                                <span>{t("projects.delete")}</span>
+                              </button>
+                            </span>
+                          ) : null}
+                        </span>
+                        <button
+                          aria-expanded={isSplitExpanded}
+                          aria-label={t("split.toggleSettings", { name: dataset.name })}
+                          className="dataset-row__split-toggle"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleDatasetSplits(dataset.id);
+                          }}
+                          type="button"
+                        >
+                          <GitBranch aria-hidden="true" size={15} />
+                          <span>
+                            {t(isSplitExpanded ? "split.toggleClose" : "split.toggleOpen", {
+                              count: datasetSplits.length,
+                            })}
+                          </span>
+                          {isSplitExpanded ? (
+                            <ChevronUp aria-hidden="true" size={15} />
+                          ) : (
+                            <ChevronDown aria-hidden="true" size={15} />
+                          )}
+                        </button>
+                      </span>
+                    </article>
+                    {isSplitExpanded ? (
+                      <div className="dataset-row-detail">
+                        <div className="dataset-row-detail__section">
+                          <div className="dataset-row-detail__header">
+                            <div>
+                              <h3>{t("split.list")}</h3>
+                            </div>
+                            <div className="dataset-row-detail__actions">
+                              {splitsQuery.isFetching ? (
+                                <Loader2 aria-hidden="true" className="spin" size={18} />
+                              ) : null}
+                              <button
+                                className="primary-button"
+                                onClick={() => openSplitDialog(dataset.id)}
+                                type="button"
+                              >
+                                <Plus aria-hidden="true" size={17} />
+                                <span>{t("dataset.createSplit")}</span>
+                              </button>
+                            </div>
+                          </div>
+                          <div className="split-list">
+                            {(splitsQuery.data ?? []).map((split) => (
+                              <div className="split-row" key={split.id}>
+                                <CheckCircle2 aria-hidden="true" size={18} />
+                                <span>
+                                  <strong>{split.name}</strong>
+                                  <small>
+                                    Train {splitPercent(split.train_ratio)} · Val{" "}
+                                    {splitPercent(split.val_ratio)} · Test{" "}
+                                    {splitPercent(split.test_ratio)}
+                                  </small>
+                                </span>
+                                <span className="split-row__counts">
+                                  {formatCount(split.train_count, language)} /{" "}
+                                  {formatCount(split.val_count, language)} /{" "}
+                                  {formatCount(split.test_count, language)}
+                                </span>
+                                <button
+                                  className="secondary-button"
+                                  onClick={() => startTrainingFromSplit(dataset.id, split.id)}
+                                  type="button"
+                                >
+                                  <Play aria-hidden="true" size={15} />
+                                  <span>{t("training.trainThisSplit")}</span>
+                                </button>
+                                <span className="split-row__menu">
+                                  <button
+                                    aria-expanded={splitMenuId === split.id}
+                                    aria-label={t("split.actions", { name: split.name })}
+                                    className="dataset-row__menu-button"
+                                    onClick={() =>
+                                      setSplitMenuId((currentId) =>
+                                        currentId === split.id ? null : split.id,
+                                      )
+                                    }
+                                    type="button"
+                                  >
+                                    <MoreVertical aria-hidden="true" size={18} />
+                                  </button>
+                                  {splitMenuId === split.id ? (
+                                    <span className="dataset-row__menu-popover">
+                                      <button onClick={() => openSplitEditDialog(split)} type="button">
+                                        <Pencil aria-hidden="true" size={15} />
+                                        <span>{t("projects.rename")}</span>
+                                      </button>
+                                      <button onClick={() => openSplitDeleteDialog(split)} type="button">
+                                        <Trash2 aria-hidden="true" size={15} />
+                                        <span>{t("projects.delete")}</span>
+                                      </button>
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                          {selectedDatasetId &&
+                          !splitsQuery.isLoading &&
+                          (splitsQuery.data ?? []).length === 0 ? (
+                            <div className="empty-state empty-state--compact">
+                              <GitBranch aria-hidden="true" size={22} />
+                              <p>{t("split.empty")}</p>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
             </div>
 
             {!datasetsQuery.isLoading && visibleDatasets.length === 0 ? (
@@ -1205,154 +1578,6 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
             ) : null}
           </div>
 
-          <div className="panel">
-            <div className="panel__header">
-              <div>
-                <p className="section-label">{t("dataset.validation")}</p>
-                <h2>{t("training.summaryMetrics")}</h2>
-              </div>
-              {selectedDatasetQuery.isFetching ? (
-                <Loader2 aria-hidden="true" className="spin" size={18} />
-              ) : null}
-            </div>
-            <DatasetValidationSummary dataset={selectedDataset} />
-          </div>
-
-          <div className="panel">
-            <div className="panel__header">
-              <div>
-                <p className="section-label">Split</p>
-                <h2>{t("training.create")}</h2>
-              </div>
-            </div>
-            <form className="split-form" onSubmit={handleSplitSubmit}>
-              <label className="field">
-                <span>{t("form.name")}</span>
-                <input
-                  disabled={!selectedDatasetId}
-                  onChange={(event) => setSplitName(event.target.value)}
-                  required
-                  type="text"
-                  value={splitName}
-                />
-              </label>
-              <div className="field-row">
-                <label className="field">
-                  <span>Train</span>
-                  <input
-                    disabled={!selectedDatasetId}
-                    max={1}
-                    min={0}
-                    onChange={(event) => {
-                      if (Number.isFinite(event.target.valueAsNumber)) {
-                        setTrainRatio(event.target.valueAsNumber);
-                      }
-                    }}
-                    step={0.05}
-                    type="number"
-                    value={trainRatio}
-                  />
-                </label>
-                <label className="field">
-                  <span>Val</span>
-                  <input
-                    disabled={!selectedDatasetId}
-                    max={1}
-                    min={0}
-                    onChange={(event) => {
-                      if (Number.isFinite(event.target.valueAsNumber)) {
-                        setValRatio(event.target.valueAsNumber);
-                      }
-                    }}
-                    step={0.05}
-                    type="number"
-                    value={valRatio}
-                  />
-                </label>
-                <label className="field">
-                  <span>Seed</span>
-                  <input
-                    disabled={!selectedDatasetId}
-                    min={0}
-                    onChange={(event) => {
-                      if (Number.isFinite(event.target.valueAsNumber)) {
-                        setSeed(event.target.valueAsNumber);
-                      }
-                    }}
-                    step={1}
-                    type="number"
-                    value={seed}
-                  />
-                </label>
-              </div>
-              {createSplit.isError ? (
-                <div className="notice notice--danger" role="alert">
-                  {t("split.createError")}
-                </div>
-              ) : null}
-              {ratioError ? (
-                <div className="notice notice--warning" role="alert">
-                  {ratioError}
-                </div>
-              ) : null}
-              <button
-                className="primary-button"
-                disabled={
-                  !selectedDatasetId ||
-                  !splitName.trim() ||
-                  Boolean(ratioError) ||
-                  createSplit.isPending
-                }
-                type="submit"
-              >
-                {createSplit.isPending ? (
-                  <Loader2 aria-hidden="true" className="spin" size={17} />
-                ) : (
-                  <GitBranch aria-hidden="true" size={17} />
-                )}
-                <span>{t("dataset.createSplit")}</span>
-              </button>
-            </form>
-          </div>
-
-          <div className="panel panel--wide">
-            <div className="panel__header">
-              <div>
-                <p className="section-label">Split</p>
-                <h2>{t("split.list")}</h2>
-              </div>
-              {splitsQuery.isFetching ? <Loader2 aria-hidden="true" className="spin" size={18} /> : null}
-            </div>
-            <div className="split-list">
-              {(splitsQuery.data ?? []).map((split) => (
-                <div className="split-row" key={split.id}>
-                  <CheckCircle2 aria-hidden="true" size={18} />
-                  <span>
-                    <strong>{split.name}</strong>
-                    <small>
-                      Train {splitPercent(split.train_ratio)} · Val {splitPercent(split.val_ratio)}
-                    </small>
-                  </span>
-                  <span className="split-row__counts">
-                    {formatCount(split.train_count, language)} / {formatCount(split.val_count, language)}
-                  </span>
-                </div>
-              ))}
-            </div>
-            {selectedDatasetId && !splitsQuery.isLoading && (splitsQuery.data ?? []).length === 0 ? (
-              <div className="empty-state empty-state--compact">
-                <GitBranch aria-hidden="true" size={22} />
-                <p>{t("split.empty")}</p>
-              </div>
-            ) : null}
-            {!selectedDatasetId ? (
-              <div className="empty-state empty-state--compact">
-                <GitBranch aria-hidden="true" size={22} />
-                <p>{t("dataset.noDatasetSelected")}</p>
-              </div>
-            ) : null}
-          </div>
-
           {datasetDialogOpen ? (
             <div className="modal-backdrop" role="presentation">
               <div
@@ -1364,7 +1589,6 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                 <form className="modal-form" onSubmit={handleDatasetSubmit}>
                   <div className="panel__header">
                     <div>
-                      <p className="section-label">{t("dataset.register")}</p>
                       <h2 id="dataset-upload-title">{t("dataset.upload")}</h2>
                     </div>
                     <button
@@ -1455,110 +1679,432 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
               </div>
             </div>
           ) : null}
+
+          {splitDialogOpen ? (
+            <div className="modal-backdrop" role="presentation">
+              <div
+                aria-labelledby="split-create-title"
+                aria-modal="true"
+                className="modal-panel"
+                role="dialog"
+              >
+                <form className="modal-form split-form" onSubmit={handleSplitSubmit}>
+                  <div className="panel__header">
+                    <div>
+                      <h2 id="split-create-title">{t("dataset.createSplit")}</h2>
+                    </div>
+                    <button
+                      aria-label={t("split.closeCreate")}
+                      className="icon-button"
+                      disabled={createSplit.isPending}
+                      onClick={closeSplitDialog}
+                      type="button"
+                    >
+                      <X aria-hidden="true" size={18} />
+                    </button>
+                  </div>
+                  <label className="field">
+                    <span>{t("form.name")}</span>
+                    <input
+                      autoFocus
+                      disabled={!selectedDatasetId}
+                      onChange={(event) => setSplitName(event.target.value)}
+                      placeholder={t("split.namePlaceholder")}
+                      required
+                      type="text"
+                      value={splitName}
+                    />
+                  </label>
+                  <div className="field-row">
+                    <label className="field">
+                      <span>Train</span>
+                      <input
+                        disabled={!selectedDatasetId}
+                        max={1}
+                        min={0}
+                        onChange={(event) => setTrainRatioInput(event.target.value)}
+                        placeholder={t("split.trainPlaceholder")}
+                        step={0.05}
+                        type="number"
+                        value={trainRatioInput}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Val</span>
+                      <input
+                        disabled={!selectedDatasetId}
+                        max={1}
+                        min={0}
+                        onChange={(event) => setValRatioInput(event.target.value)}
+                        placeholder={t("split.valPlaceholder")}
+                        step={0.05}
+                        type="number"
+                        value={valRatioInput}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Test</span>
+                      <input
+                        disabled={!selectedDatasetId}
+                        max={1}
+                        min={0}
+                        onChange={(event) => setTestRatioInput(event.target.value)}
+                        placeholder={t("split.testPlaceholder")}
+                        step={0.05}
+                        type="number"
+                        value={testRatioInput}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Seed</span>
+                      <input
+                        disabled={!selectedDatasetId}
+                        min={0}
+                        onChange={(event) => setSeedInput(event.target.value)}
+                        placeholder={t("split.seedPlaceholder")}
+                        step={1}
+                        type="number"
+                        value={seedInput}
+                      />
+                    </label>
+                  </div>
+                  {createSplit.isError ? (
+                    <div className="notice notice--danger" role="alert">
+                      {t("split.createError")}
+                    </div>
+                  ) : null}
+                  {ratioError ? (
+                    <div className="notice notice--warning" role="alert">
+                      {ratioError}
+                    </div>
+                  ) : null}
+                  <div className="modal-actions">
+                    <button
+                      className="secondary-button"
+                      disabled={createSplit.isPending}
+                      onClick={closeSplitDialog}
+                      type="button"
+                    >
+                      {t("projects.cancel")}
+                    </button>
+                    <button
+                      className="primary-button"
+                      disabled={
+                        !selectedDatasetId ||
+                        !splitName.trim() ||
+                        Boolean(ratioError) ||
+                        createSplit.isPending
+                      }
+                      type="submit"
+                    >
+                      {createSplit.isPending ? (
+                        <Loader2 aria-hidden="true" className="spin" size={17} />
+                      ) : (
+                        <GitBranch aria-hidden="true" size={17} />
+                      )}
+                      <span>{t("dataset.createSplit")}</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          ) : null}
+
+          {editingSplit ? (
+            <div className="modal-backdrop" role="presentation">
+              <div
+                aria-labelledby="split-edit-title"
+                aria-modal="true"
+                className="modal-panel"
+                role="dialog"
+              >
+                <form className="modal-form" onSubmit={handleSplitEditSubmit}>
+                  <div className="panel__header">
+                    <div>
+                      <h2 id="split-edit-title">{editingSplit.name}</h2>
+                    </div>
+                    <button
+                      aria-label={t("split.closeEdit")}
+                      className="icon-button"
+                      disabled={updateSplit.isPending}
+                      onClick={closeSplitEditDialog}
+                      type="button"
+                    >
+                      <X aria-hidden="true" size={18} />
+                    </button>
+                  </div>
+
+                  <label className="field">
+                    <span>{t("form.name")}</span>
+                    <input
+                      autoFocus
+                      onChange={(event) => setSplitEditName(event.target.value)}
+                      required
+                      type="text"
+                      value={splitEditName}
+                    />
+                  </label>
+
+                  {updateSplit.isError ? (
+                    <div className="notice notice--danger" role="alert">
+                      {t("split.updateError")}
+                    </div>
+                  ) : null}
+
+                  <div className="modal-actions">
+                    <button
+                      className="secondary-button"
+                      disabled={updateSplit.isPending}
+                      onClick={closeSplitEditDialog}
+                      type="button"
+                    >
+                      {t("projects.cancel")}
+                    </button>
+                    <button
+                      className="primary-button"
+                      disabled={!splitEditName.trim() || updateSplit.isPending}
+                      type="submit"
+                    >
+                      {updateSplit.isPending ? (
+                        <Loader2 aria-hidden="true" className="spin" size={17} />
+                      ) : (
+                        <Pencil aria-hidden="true" size={17} />
+                      )}
+                      <span>{t("split.update")}</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          ) : null}
+
+          {deletingSplit ? (
+            <div className="modal-backdrop" role="presentation">
+              <div
+                aria-labelledby="split-delete-title"
+                aria-modal="true"
+                className="modal-panel"
+                role="dialog"
+              >
+                <div className="modal-form">
+                  <div className="panel__header">
+                    <div>
+                      <h2 id="split-delete-title">
+                        {t("split.deleteConfirm", { name: deletingSplit.name })}
+                      </h2>
+                    </div>
+                    <button
+                      aria-label={t("split.closeDelete")}
+                      className="icon-button"
+                      disabled={deleteSplit.isPending}
+                      onClick={closeSplitDeleteDialog}
+                      type="button"
+                    >
+                      <X aria-hidden="true" size={18} />
+                    </button>
+                  </div>
+
+                  <div className="notice notice--warning">
+                    {t("split.deleteWarning")}
+                  </div>
+
+                  {deleteSplit.isError ? (
+                    <div className="notice notice--danger" role="alert">
+                      {t("split.deleteError")}
+                    </div>
+                  ) : null}
+
+                  <div className="modal-actions">
+                    <button
+                      className="secondary-button"
+                      disabled={deleteSplit.isPending}
+                      onClick={closeSplitDeleteDialog}
+                      type="button"
+                    >
+                      {t("projects.cancel")}
+                    </button>
+                    <button
+                      className="danger-button"
+                      disabled={deleteSplit.isPending}
+                      onClick={handleSplitDeleteConfirm}
+                      type="button"
+                    >
+                      {deleteSplit.isPending ? (
+                        <Loader2 aria-hidden="true" className="spin" size={17} />
+                      ) : (
+                        <Trash2 aria-hidden="true" size={17} />
+                      )}
+                      <span>{t("projects.delete")}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {editingDataset ? (
+            <div className="modal-backdrop" role="presentation">
+              <div
+                aria-labelledby="dataset-edit-title"
+                aria-modal="true"
+                className="modal-panel"
+                role="dialog"
+              >
+                <form className="modal-form" onSubmit={handleDatasetEditSubmit}>
+                  <div className="panel__header">
+                    <div>
+                      <h2 id="dataset-edit-title">{editingDataset.name}</h2>
+                    </div>
+                    <button
+                      aria-label={t("dataset.closeEdit")}
+                      className="icon-button"
+                      disabled={updateDataset.isPending}
+                      onClick={closeDatasetEditDialog}
+                      type="button"
+                    >
+                      <X aria-hidden="true" size={18} />
+                    </button>
+                  </div>
+
+                  <label className="field">
+                    <span>{t("form.name")}</span>
+                    <input
+                      autoFocus
+                      onChange={(event) => setDatasetEditName(event.target.value)}
+                      required
+                      type="text"
+                      value={datasetEditName}
+                    />
+                  </label>
+
+                  {updateDataset.isError ? (
+                    <div className="notice notice--danger" role="alert">
+                      {t("dataset.updateError")}
+                    </div>
+                  ) : null}
+
+                  <div className="modal-actions">
+                    <button
+                      className="secondary-button"
+                      disabled={updateDataset.isPending}
+                      onClick={closeDatasetEditDialog}
+                      type="button"
+                    >
+                      {t("projects.cancel")}
+                    </button>
+                    <button
+                      className="primary-button"
+                      disabled={!datasetEditName.trim() || updateDataset.isPending}
+                      type="submit"
+                    >
+                      {updateDataset.isPending ? (
+                        <Loader2 aria-hidden="true" className="spin" size={17} />
+                      ) : (
+                        <Pencil aria-hidden="true" size={17} />
+                      )}
+                      <span>{t("dataset.update")}</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          ) : null}
+
+          {deletingDataset ? (
+            <div className="modal-backdrop" role="presentation">
+              <div
+                aria-labelledby="dataset-delete-title"
+                aria-modal="true"
+                className="modal-panel"
+                role="dialog"
+              >
+                <div className="modal-form">
+                  <div className="panel__header">
+                    <div>
+                      <h2 id="dataset-delete-title">
+                        {t("dataset.deleteConfirm", { name: deletingDataset.name })}
+                      </h2>
+                    </div>
+                    <button
+                      aria-label={t("dataset.closeDelete")}
+                      className="icon-button"
+                      disabled={deleteDataset.isPending}
+                      onClick={closeDatasetDeleteDialog}
+                      type="button"
+                    >
+                      <X aria-hidden="true" size={18} />
+                    </button>
+                  </div>
+
+                  <div className="notice notice--warning">
+                    {t("dataset.deleteWarning")}
+                  </div>
+
+                  {deleteDataset.isError ? (
+                    <div className="notice notice--danger" role="alert">
+                      {t("dataset.deleteError")}
+                    </div>
+                  ) : null}
+
+                  <div className="modal-actions">
+                    <button
+                      className="secondary-button"
+                      disabled={deleteDataset.isPending}
+                      onClick={closeDatasetDeleteDialog}
+                      type="button"
+                    >
+                      {t("projects.cancel")}
+                    </button>
+                    <button
+                      className="danger-button"
+                      disabled={deleteDataset.isPending}
+                      onClick={handleDatasetDeleteConfirm}
+                      type="button"
+                    >
+                      {deleteDataset.isPending ? (
+                        <Loader2 aria-hidden="true" className="spin" size={17} />
+                      ) : (
+                        <Trash2 aria-hidden="true" size={17} />
+                      )}
+                      <span>{t("projects.delete")}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
       {activeTab === "training" ? (
         <section
           aria-labelledby="training-tab"
-          className="training-layout"
+          className="training-workspace"
           id="training-panel"
           role="tabpanel"
         >
+          <div className="training-layout">
           <div className="training-sidebar">
-            <div className="panel">
+            <div className="panel training-target-panel">
               <div className="panel__header">
                 <div>
-                  <p className="section-label">{t("detail.training")}</p>
-                  <h2>{t("training.list")}</h2>
+                  <h2>{t("training.targetSplit")}</h2>
                 </div>
-                {trainingRunsQuery.isFetching ? (
-                  <Loader2 aria-hidden="true" className="spin" size={18} />
-                ) : null}
-              </div>
-
-              <div className="segment-control" aria-label={t("training.filter")}>
-                {trainingStatusFilters.map((filter) => (
+                <div className="panel__actions">
+                  {trainingSplitQueries.some((query) => query.isFetching) ? (
+                    <Loader2 aria-hidden="true" className="spin" size={18} />
+                  ) : null}
                   <button
-                    aria-pressed={trainingStatusFilter === filter.key}
-                    key={filter.key}
-                    onClick={() => setTrainingStatusFilter(filter.key)}
+                    className="primary-button"
+                    disabled={!selectedTrainingSplitOption}
+                    onClick={openTrainingDrawer}
                     type="button"
                   >
-                    {t(filter.labelKey)}
+                    <Plus aria-hidden="true" size={17} />
+                    <span>{t("training.new")}</span>
                   </button>
-                ))}
-              </div>
-
-              {filteredTrainingRuns.length > 0 ? (
-                <div className="training-run-list">
-                  {filteredTrainingRuns.map((run) => (
-                    <button
-                      className="training-run-row"
-                      data-selected={selectedTrainingRun?.id === run.id ? "true" : undefined}
-                      key={run.id}
-                      onClick={() => setSelectedTrainingRunId(run.id)}
-                      type="button"
-                    >
-                      <span>
-                        <strong>{run.name}</strong>
-                        <small>
-                          {run.model_name} · {formatDate(run.created_at, language)}
-                        </small>
-                      </span>
-                      <StatusBadge status={run.status} />
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state empty-state--compact">
-                  <p>
-                    {trainingRunsQuery.isLoading ? t("training.listLoading") : t("training.listEmpty")}
-                  </p>
-                </div>
-              )}
-
-              {trainingRunsQuery.isError ? (
-                <div className="notice notice--danger" role="alert">
-                  {t("training.listLoadError")}
-                </div>
-              ) : null}
-            </div>
-
-            <form className="panel form-panel training-form" onSubmit={handleTrainingSubmit}>
-              <div className="panel__header">
-                <div>
-                  <p className="section-label">{t("training.create")}</p>
-                  <h2>{t("training.new")}</h2>
                 </div>
               </div>
-
-              <label className="field">
-                <span>{t("form.name")}</span>
-                <input
-                  onChange={(event) => setTrainingName(event.target.value)}
-                  placeholder={t("training.namePlaceholder")}
-                  required
-                  type="text"
-                  value={trainingName}
-                />
-              </label>
-
-              <label className="field">
-                <span>Split</span>
-                <select
-                  disabled={trainingSplitOptions.length === 0}
-                  onChange={(event) => setTrainingSplitId(event.target.value)}
-                  required
-                  value={trainingSplitId}
-                >
-                  {trainingSplitOptions.map(({ datasetName, split }) => (
-                    <option key={split.id} value={split.id}>
-                      {datasetName} / {split.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
 
               {datasetsQuery.isLoading ? (
                 <div className="notice notice--warning">{t("dataset.loading")}</div>
@@ -1577,9 +2123,92 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                   <small>{t("training.splitRequiredHelp")}</small>
                 </div>
               ) : null}
+              {trainingSplitOptions.length > 0 ? (
+                <div className="training-split-list">
+                  {trainingSplitOptions.map((option) => (
+                    <button
+                      className="training-split-option"
+                      data-selected={trainingSplitId === option.split.id ? "true" : undefined}
+                      key={option.split.id}
+                      onClick={() => selectTrainingSplit(option.datasetId, option.split.id)}
+                      type="button"
+                    >
+                      <span>
+                        <strong>
+                          {option.datasetName} / {option.split.name}
+                        </strong>
+                        <small>
+                          Train {splitPercent(option.split.train_ratio)} · Val{" "}
+                          {splitPercent(option.split.val_ratio)} · Test{" "}
+                          {splitPercent(option.split.test_ratio)}
+                        </small>
+                      </span>
+                      <span className="split-row__counts">
+                        {formatCount(option.split.train_count, language)} /{" "}
+                        {formatCount(option.split.val_count, language)} /{" "}
+                        {formatCount(option.split.test_count, language)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            {trainingDrawerOpen ? (
+              <div className="modal-backdrop" role="presentation">
+                <aside
+                  aria-labelledby="training-create-title"
+                  aria-modal="true"
+                  className="training-modal"
+                  role="dialog"
+                >
+                  <form className="form-panel training-form training-form--modal" onSubmit={handleTrainingSubmit}>
+              <div className="panel__header training-modal__header">
+                <div>
+                  <h2 id="training-create-title">{t("training.new")}</h2>
+                </div>
+                <button
+                  aria-label={t("projects.cancel")}
+                  className="icon-button"
+                  disabled={createTrainingRun.isPending || runTrainingPreflight.isPending}
+                  onClick={closeTrainingDrawer}
+                  type="button"
+                >
+                  <X aria-hidden="true" size={18} />
+                </button>
+              </div>
 
               <label className="field">
-                <span>{t("training.hyperparameterPreset")}</span>
+                <span>{t("form.name")}</span>
+                <input
+                  onChange={(event) => setTrainingName(event.target.value)}
+                  placeholder={t("training.namePlaceholder")}
+                  required
+                  type="text"
+                  value={trainingName}
+                />
+              </label>
+
+              {selectedTrainingSplitOption ? (
+                <div className="training-target-summary">
+                  <span>{t("training.targetSplit")}</span>
+                  <strong>
+                    {selectedTrainingSplitOption.datasetName} /{" "}
+                    {selectedTrainingSplitOption.split.name}
+                  </strong>
+                  <small>
+                    Train {splitPercent(selectedTrainingSplitOption.split.train_ratio)} · Val{" "}
+                    {splitPercent(selectedTrainingSplitOption.split.val_ratio)} · Test{" "}
+                    {splitPercent(selectedTrainingSplitOption.split.test_ratio)}
+                  </small>
+                </div>
+              ) : null}
+
+              <label className="field">
+                <FieldLabel
+                  help={t("training.help.hyperparameterPreset")}
+                  label={t("training.hyperparameterPreset")}
+                />
                 <select
                   aria-label={t("training.hyperparameterPreset")}
                   onChange={(event) => applyTrainingPreset(event.target.value as TrainingPresetKey)}
@@ -1594,9 +2223,12 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
               </label>
 
               <label className="field">
-                <span>{t("training.modelPreset")}</span>
+                <FieldLabel help={t("training.help.modelPreset")} label={t("training.modelPreset")} />
                 <select
-                  onChange={(event) => setTrainingModelName(event.target.value)}
+                  onChange={(event) => {
+                    clearTrainingCommandPreview();
+                    setTrainingModelName(event.target.value);
+                  }}
                   value={trainingModelName}
                 >
                   <option value="yolo11n">yolo11n</option>
@@ -1607,7 +2239,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
 
               <div className="field-row field-row--two">
                 <label className="field">
-                  <span>epochs</span>
+                  <FieldLabel help={t("training.help.epochs")} label="epochs" />
                   <input
                     min={1}
                     onChange={(event) =>
@@ -1619,7 +2251,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                   />
                 </label>
                 <label className="field">
-                  <span>batch</span>
+                  <FieldLabel help={t("training.help.batch")} label="batch" />
                   <input
                     min={1}
                     onChange={(event) =>
@@ -1631,7 +2263,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                   />
                 </label>
                 <label className="field">
-                  <span>imgsz</span>
+                  <FieldLabel help={t("training.help.imgsz")} label="imgsz" />
                   <input
                     min={1}
                     onChange={(event) =>
@@ -1643,46 +2275,19 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                   />
                 </label>
                 <label className="field">
-                  <span>learning rate</span>
+                  <FieldLabel help={t("training.help.learningRate")} label="learning rate" />
                   <input
                     min={0.000001}
                     onChange={(event) =>
                       updateTrainingNumberConfig("learning_rate", event.target.valueAsNumber)
                     }
-                    step={0.001}
+                    step="any"
                     type="number"
                     value={trainingConfig.learning_rate}
                   />
                 </label>
                 <label className="field">
-                  <span>optimizer</span>
-                  <select
-                    onChange={(event) => updateTrainingConfig("optimizer", event.target.value)}
-                    value={trainingConfig.optimizer}
-                  >
-                    <option value="auto">auto</option>
-                    <option value="SGD">SGD</option>
-                    <option value="Adam">Adam</option>
-                    <option value="AdamW">AdamW</option>
-                    <option value="NAdam">NAdam</option>
-                    <option value="RAdam">RAdam</option>
-                    <option value="RMSProp">RMSProp</option>
-                  </select>
-                </label>
-                <label className="field">
-                  <span>patience</span>
-                  <input
-                    min={1}
-                    onChange={(event) =>
-                      updateTrainingNumberConfig("patience", event.target.valueAsNumber)
-                    }
-                    step={1}
-                    type="number"
-                    value={trainingConfig.patience}
-                  />
-                </label>
-                <label className="field">
-                  <span>device</span>
+                  <FieldLabel help={t("training.help.device")} label="device" />
                   <select
                     onChange={(event) => updateTrainingConfig("device", event.target.value)}
                     value={trainingConfig.device}
@@ -1698,31 +2303,62 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                 </label>
               </div>
 
-              <details className="advanced-settings">
+              <details
+                className="advanced-settings"
+                onToggle={(event) => setAdvancedTrainingOpen(event.currentTarget.open)}
+                open={advancedTrainingOpen}
+              >
                 <summary>{t("training.advancedHyperparameters")}</summary>
                 <div className="field-row field-row--two">
                   <label className="field">
-                    <span>lrf</span>
+                    <FieldLabel help={t("training.help.optimizer")} label="optimizer" />
+                    <select
+                      onChange={(event) => updateTrainingConfig("optimizer", event.target.value)}
+                      value={trainingConfig.optimizer}
+                    >
+                      <option value="auto">auto</option>
+                      <option value="SGD">SGD</option>
+                      <option value="Adam">Adam</option>
+                      <option value="AdamW">AdamW</option>
+                      <option value="NAdam">NAdam</option>
+                      <option value="RAdam">RAdam</option>
+                      <option value="RMSProp">RMSProp</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <FieldLabel help={t("training.help.patience")} label="patience" />
+                    <input
+                      min={1}
+                      onChange={(event) =>
+                        updateTrainingNumberConfig("patience", event.target.valueAsNumber)
+                      }
+                      step={1}
+                      type="number"
+                      value={trainingConfig.patience}
+                    />
+                  </label>
+                  <label className="field">
+                    <FieldLabel help={t("training.help.lrf")} label="lrf" />
                     <input
                       min={0.000001}
                       onChange={(event) => updateTrainingNumberConfig("lrf", event.target.valueAsNumber)}
-                      step={0.001}
+                      step="any"
                       type="number"
                       value={trainingConfig.lrf}
                     />
                   </label>
                   <label className="field">
-                    <span>momentum</span>
+                    <FieldLabel help={t("training.help.momentum")} label="momentum" />
                     <input
                       min={0.000001}
                       onChange={(event) => updateTrainingNumberConfig("momentum", event.target.valueAsNumber)}
-                      step={0.001}
+                      step="any"
                       type="number"
                       value={trainingConfig.momentum}
                     />
                   </label>
                   <label className="field">
-                    <span>weight decay</span>
+                    <FieldLabel help={t("training.help.weightDecay")} label="weight decay" />
                     <input
                       min={0}
                       onChange={(event) => updateTrainingNumberConfig("weight_decay", event.target.valueAsNumber)}
@@ -1732,7 +2368,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>warmup epochs</span>
+                    <FieldLabel help={t("training.help.warmupEpochs")} label="warmup epochs" />
                     <input
                       min={0}
                       onChange={(event) => updateTrainingNumberConfig("warmup_epochs", event.target.valueAsNumber)}
@@ -1742,7 +2378,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>close mosaic</span>
+                    <FieldLabel help={t("training.help.closeMosaic")} label="close mosaic" />
                     <input
                       min={0}
                       onChange={(event) => updateTrainingNumberConfig("close_mosaic", event.target.valueAsNumber)}
@@ -1752,7 +2388,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>workers</span>
+                    <FieldLabel help={t("training.help.workers")} label="workers" />
                     <input
                       min={0}
                       onChange={(event) => updateTrainingNumberConfig("workers", event.target.valueAsNumber)}
@@ -1762,7 +2398,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>seed</span>
+                    <FieldLabel help={t("training.help.seed")} label="seed" />
                     <input
                       min={0}
                       onChange={(event) => updateTrainingNumberConfig("seed", event.target.valueAsNumber)}
@@ -1772,7 +2408,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>freeze</span>
+                    <FieldLabel help={t("training.help.freeze")} label="freeze" />
                     <input
                       min={0}
                       onChange={(event) => updateTrainingNumberConfig("freeze", event.target.valueAsNumber)}
@@ -1782,7 +2418,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>dropout</span>
+                    <FieldLabel help={t("training.help.dropout")} label="dropout" />
                     <input
                       max={1}
                       min={0}
@@ -1793,7 +2429,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>mosaic</span>
+                    <FieldLabel help={t("training.help.mosaic")} label="mosaic" />
                     <input
                       max={1}
                       min={0}
@@ -1804,7 +2440,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>mixup</span>
+                    <FieldLabel help={t("training.help.mixup")} label="mixup" />
                     <input
                       max={1}
                       min={0}
@@ -1815,7 +2451,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>degrees</span>
+                    <FieldLabel help={t("training.help.degrees")} label="degrees" />
                     <input
                       min={0}
                       onChange={(event) => updateTrainingNumberConfig("degrees", event.target.valueAsNumber)}
@@ -1825,7 +2461,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>translate</span>
+                    <FieldLabel help={t("training.help.translate")} label="translate" />
                     <input
                       max={1}
                       min={0}
@@ -1836,7 +2472,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>scale</span>
+                    <FieldLabel help={t("training.help.scale")} label="scale" />
                     <input
                       min={0}
                       onChange={(event) => updateTrainingNumberConfig("scale", event.target.valueAsNumber)}
@@ -1846,7 +2482,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     />
                   </label>
                   <label className="field">
-                    <span>fliplr</span>
+                    <FieldLabel help={t("training.help.fliplr")} label="fliplr" />
                     <input
                       max={1}
                       min={0}
@@ -1864,7 +2500,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                       onChange={(event) => updateTrainingBooleanConfig("cos_lr", event.target.checked)}
                       type="checkbox"
                     />
-                    <span>cos lr</span>
+                    <FieldLabel help={t("training.help.cosLr")} label="cos lr" />
                   </label>
                   <label className="toggle-field">
                     <input
@@ -1872,7 +2508,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                       onChange={(event) => updateTrainingBooleanConfig("cache", event.target.checked)}
                       type="checkbox"
                     />
-                    <span>cache</span>
+                    <FieldLabel help={t("training.help.cache")} label="cache" />
                   </label>
                   <label className="toggle-field">
                     <input
@@ -1880,7 +2516,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                       onChange={(event) => updateTrainingBooleanConfig("deterministic", event.target.checked)}
                       type="checkbox"
                     />
-                    <span>deterministic</span>
+                    <FieldLabel help={t("training.help.deterministic")} label="deterministic" />
                   </label>
                   <label className="toggle-field">
                     <input
@@ -1888,23 +2524,10 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                       onChange={(event) => updateTrainingBooleanConfig("amp", event.target.checked)}
                       type="checkbox"
                     />
-                    <span>amp</span>
+                    <FieldLabel help={t("training.help.amp")} label="amp" />
                   </label>
                 </div>
               </details>
-
-              <div className="runtime-panel-wrap">
-                <div className="panel__header panel__header--compact">
-                  <div>
-                    <p className="section-label">Runtime</p>
-                    <h2>{t("runtime.trainingEnvironment")}</h2>
-                  </div>
-                  {runtimeQuery.isFetching ? (
-                    <Loader2 aria-hidden="true" className="spin" size={18} />
-                  ) : null}
-                </div>
-                <RuntimePanel installRuntime={installRuntime} runtime={runtimeQuery.data} />
-              </div>
 
               {trainingFormError ? (
                 <div className="notice notice--warning" role="alert">
@@ -1916,6 +2539,15 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                   {createTrainingRun.error instanceof Error
                     ? createTrainingRun.error.message
                     : t("training.createError")}
+                </div>
+              ) : null}
+              {trainingCommandPreview ? (
+                <div className="command-preview">
+                  <div>
+                    <strong>{t("training.commandPreview")}</strong>
+                    <small>{t("training.commandPreviewHelp")}</small>
+                  </div>
+                  <pre><code>{trainingCommandPreview.shell}</code></pre>
                 </div>
               ) : null}
               {preflightResult && !preflightResult.can_start ? (
@@ -1953,17 +2585,74 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                 ) : (
                   <Play aria-hidden="true" size={17} />
                 )}
-                <span>{t("training.start")}</span>
+                <span>{t(canStartAfterCommandPreview ? "training.start" : "training.previewCommand")}</span>
               </button>
-            </form>
+                  </form>
+                </aside>
+              </div>
+            ) : null}
           </div>
 
-          <TrainingRunPage
-            initialRun={selectedTrainingRun}
-            projectId={projectId}
-            runId={selectedTrainingRun?.id ?? selectedTrainingRunId}
-          />
+          <div className="panel training-terminal-panel">
+            <div className="panel__header">
+              <div>
+                <div className="training-terminal-title">
+                  <h2>{t("training.liveTerminal")}</h2>
+                  {selectedTrainingRun ? <span>{selectedTrainingRun.name}</span> : null}
+                </div>
+              </div>
+              {selectedTrainingRun ? (
+                <div className="panel__actions">
+                  <StatusBadge status={selectedTrainingRun.status} />
+                  <button
+                    className="secondary-button"
+                    onClick={() => setTrainingResultRunId(selectedTrainingRun.id)}
+                    type="button"
+                  >
+                    {t("training.viewResults")}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            {selectedTrainingRun ? (
+              <LogViewer projectId={projectId} runId={selectedTrainingRun.id} status={selectedTrainingRun.status} />
+            ) : (
+              <div className="empty-state empty-state--compact">
+                <p>{t("training.noRunSelected")}</p>
+              </div>
+            )}
+          </div>
+          </div>
         </section>
+      ) : null}
+      {trainingResultRunId ? (
+        <div className="modal-backdrop" role="presentation">
+          <div
+            aria-labelledby="training-results-title"
+            aria-modal="true"
+            className="modal-panel modal-panel--wide"
+            role="dialog"
+          >
+            <div className="panel__header">
+              <div>
+                <h2 id="training-results-title">{t("training.results")}</h2>
+              </div>
+              <button
+                aria-label={t("projects.cancel")}
+                className="icon-button"
+                onClick={() => setTrainingResultRunId(null)}
+                type="button"
+              >
+                <X aria-hidden="true" size={18} />
+              </button>
+            </div>
+            <TrainingRunPage
+              initialRun={trainingRuns.find((run) => run.id === trainingResultRunId) ?? null}
+              projectId={projectId}
+              runId={trainingResultRunId}
+            />
+          </div>
+        </div>
       ) : null}
       {activeTab === "inference" ? (
         <section
@@ -1972,181 +2661,166 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
           id="inference-panel"
           role="tabpanel"
         >
-          <form className="panel form-panel" onSubmit={handleInferenceSubmit}>
-            <div className="panel__header">
-              <div>
-                <p className="section-label">Inference</p>
-                <h2>{t("inference.run")}</h2>
-              </div>
-              {trainingRunsQuery.isFetching ? (
-                <Loader2 aria-hidden="true" className="spin" size={18} />
-              ) : null}
-            </div>
-
-            <label className="field">
-              <span>{t("form.name")}</span>
-              <input
-                onChange={(event) => setInferenceName(event.target.value)}
-                placeholder={t("inference.namePlaceholder")}
-                required
-                type="text"
-                value={inferenceName}
-              />
-            </label>
-
-            <label className="field">
-              <span>{t("inference.model")}</span>
-              <select
-                disabled={artifactOptions.length === 0}
-                onChange={(event) => setInferenceArtifactId(event.target.value)}
-                required
-                value={selectedInferenceArtifactId}
-              >
-                {artifactOptions.map((option) => (
-                  <option key={option.artifact.id} value={option.artifact.id}>
-                    {artifactOptionLabel(option)} - {fileName(option.artifact.path)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {artifactOptions.length === 0 ? (
-              <div className="empty-state empty-state--compact">
-                <p>{t("inference.availableModelEmpty")}</p>
-                <small>{t("inference.availableModelHelp")}</small>
-              </div>
-            ) : null}
-
-            <label className="field">
-              <span>{t("inference.inputType")}</span>
-              <select
-                aria-label={t("inference.inputTypeLabel")}
-                onChange={(event) => {
-                  setInferenceInputType(event.target.value as "image" | "folder");
-                  setInferenceFiles([]);
-                }}
-                value={inferenceInputType}
-              >
-                <option value="folder">{t("inference.folder")}</option>
-                <option value="image">{t("inference.image")}</option>
-              </select>
-            </label>
-
-            <DatasetUploadPicker
-              accept=".jpg,.jpeg,.png,.bmp,.webp"
-              description={
-                inferenceInputType === "folder"
-                  ? t("inference.folderDescription")
-                  : t("inference.imageDescription")
-              }
-              directory={inferenceInputType === "folder"}
-              files={inferenceFiles}
-              inputLabel={
-                inferenceInputType === "folder" ? t("inference.folderSelect") : t("inference.imageSelect")
-              }
-              kind="inference_input"
-              multiple={inferenceInputType === "folder"}
-              onFilesChange={(files) =>
-                setInferenceFiles(inferenceInputType === "folder" ? files : files.slice(0, 1))
-              }
-              title={inferenceInputType === "folder" ? t("dataset.imageFolder") : t("inference.image")}
-            />
-
-            <div className="field-row field-row--two">
-              <label className="field">
-                <span>conf</span>
-                <input
-                  max={1}
-                  min={0}
-                  onChange={(event) =>
-                    updateInferenceNumberConfig("conf", event.target.valueAsNumber)
-                  }
-                  step={0.01}
-                  type="number"
-                  value={inferenceConfig.conf}
-                />
-              </label>
-              <label className="field">
-                <span>imgsz</span>
-                <input
-                  min={1}
-                  onChange={(event) =>
-                    updateInferenceNumberConfig("imgsz", event.target.valueAsNumber)
-                  }
-                  step={1}
-                  type="number"
-                  value={inferenceConfig.imgsz}
-                />
-              </label>
-            </div>
-
-            {createInferenceRun.isError ? (
-              <div className="notice notice--danger" role="alert">
-                {createInferenceRun.error instanceof Error
-                  ? createInferenceRun.error.message
-                  : t("inference.createError")}
-              </div>
-            ) : null}
-
-            <button
-              className="primary-button"
-              disabled={
-                !inferenceName.trim() ||
-                !selectedInferenceArtifactId ||
-                inferenceFiles.length === 0 ||
-                createInferenceRun.isPending
-              }
-              type="submit"
-            >
-              {createInferenceRun.isPending ? (
-                <Loader2 aria-hidden="true" className="spin" size={17} />
-              ) : (
-                <Play aria-hidden="true" size={17} />
-              )}
-              <span>{t("inference.start")}</span>
-            </button>
-          </form>
-
           <div className="panel panel--wide">
             <div className="panel__header">
               <div>
-                <p className="section-label">Runs</p>
                 <h2>{t("inference.runs")}</h2>
               </div>
               {inferenceRunsQuery.isFetching ? (
                 <Loader2 aria-hidden="true" className="spin" size={18} />
               ) : null}
+              <button className="primary-button" onClick={openInferenceDialog} type="button">
+                <Plus aria-hidden="true" size={17} />
+                <span>{t("inference.new")}</span>
+              </button>
             </div>
             {inferenceRuns.length > 0 ? (
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>{t("projects.columnName")}</th>
-                      <th>ID</th>
-                      <th>{t("projects.columnStatus")}</th>
-                      <th>{t("inference.input")}</th>
-                      <th>{t("inference.predictions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {inferenceRuns.map((run) => (
-                      <tr
-                        data-selected={selectedInferenceRun?.id === run.id ? "true" : undefined}
-                        key={run.id}
+              <div className="inference-run-list">
+                {inferenceRuns.map((run, index) => {
+                  const predictions = inferencePredictionsByRunId.get(run.id) ?? [];
+                  const thumbnailPrediction = predictions.find((prediction) =>
+                    Boolean(prediction.output_image_path),
+                  );
+                  const isExpanded = expandedInferenceRunId === run.id;
+                  const predictionQuery = inferencePredictionQueries[index];
+                  return (
+                    <article
+                      className="inference-run-row"
+                      data-selected={selectedInferenceRun?.id === run.id ? "true" : undefined}
+                      key={run.id}
+                    >
+                      <button
+                        className="inference-run-summary"
                         onClick={() => setSelectedInferenceRunId(run.id)}
+                        type="button"
                       >
-                        <td>{run.name}</td>
-                        <td>{run.id}</td>
-                        <td>
-                          <StatusBadge status={run.status} />
-                        </td>
-                        <td>{run.input_path}</td>
-                        <td>{run.prediction_count}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        <div className="inference-run-thumbnail">
+                          {thumbnailPrediction ? (
+                            <img
+                              alt={t("inference.resultAlt", {
+                                name: fileName(thumbnailPrediction.image_path),
+                              })}
+                              src={predictionImageUrl(projectId, run.id, thumbnailPrediction)}
+                            />
+                          ) : (
+                            <div className="inference-run-thumbnail__empty">
+                              {t("inference.noThumbnail")}
+                            </div>
+                          )}
+                        </div>
+                        <div className="inference-run-main">
+                          <div className="inference-run-title">
+                            <strong>{run.name}</strong>
+                            <StatusBadge status={run.status} />
+                          </div>
+                          <div className="inference-run-meta">
+                            <span>{inferenceInputTypeLabel(run)}</span>
+                            <span>{inferenceInputSummary(run)}</span>
+                            <span>
+                              {t("inference.predictionCount", {
+                                count: formatCount(run.prediction_count, language),
+                              })}
+                            </span>
+                          </div>
+                          <code title={run.id}>{shortInternalId(run.id)}</code>
+                        </div>
+                      </button>
+                      <div className="inference-run-actions">
+                        <button
+                          className="secondary-button"
+                          onClick={() =>
+                            setExpandedInferenceRunId((currentId) =>
+                              currentId === run.id ? null : run.id,
+                            )
+                          }
+                          type="button"
+                        >
+                          {isExpanded ? (
+                            <ChevronUp aria-hidden="true" size={16} />
+                          ) : (
+                            <ChevronDown aria-hidden="true" size={16} />
+                          )}
+                          <span>{t(isExpanded ? "inference.collapse" : "inference.details")}</span>
+                        </button>
+                        <button
+                          aria-label={t("inference.deleteRun", { name: run.name })}
+                          className="icon-button"
+                          disabled={deleteInferenceRun.isPending}
+                          onClick={() => deleteInferenceRun.mutate(run)}
+                          type="button"
+                        >
+                          <Trash2 aria-hidden="true" size={16} />
+                        </button>
+                      </div>
+                      {isExpanded ? (
+                        <div className="inference-run-details">
+                          <div className="panel__header panel__header--compact">
+                            <div>
+                              <h2>{t("inference.results")}</h2>
+                            </div>
+                            {predictionQuery?.isFetching ? (
+                              <Loader2 aria-hidden="true" className="spin" size={18} />
+                            ) : null}
+                          </div>
+
+                          {run.status !== "completed" ? (
+                            <div className="empty-state empty-state--compact">
+                              <p>{t("inference.resultsPending")}</p>
+                              <small>{t("inference.resultsPendingHelp")}</small>
+                            </div>
+                          ) : predictions.length > 0 ? (
+                            <div className="prediction-grid prediction-grid--embedded">
+                              {predictions.map((prediction) => {
+                                const detections = predictionDetections(prediction);
+                                const hasRenderedImage = Boolean(prediction.output_image_path);
+                                return (
+                                  <article className="prediction-card" key={prediction.id}>
+                                    {hasRenderedImage ? (
+                                      <img
+                                        alt={t("inference.resultAlt", {
+                                          name: fileName(prediction.image_path),
+                                        })}
+                                        src={predictionImageUrl(projectId, run.id, prediction)}
+                                      />
+                                    ) : (
+                                      <div className="prediction-card__missing">
+                                        <p>{t("inference.noResultImage")}</p>
+                                        <small>{t("inference.noResultImageHelp")}</small>
+                                      </div>
+                                    )}
+                                    <div className="prediction-card__body">
+                                      <strong>{fileName(prediction.image_path)}</strong>
+                                      <span>
+                                        {t("inference.objectCount", {
+                                          count: detections.length,
+                                          confidence: prediction.max_confidence.toFixed(2),
+                                        })}
+                                      </span>
+                                      {detections.length > 0 ? (
+                                        <div className="prediction-tags">
+                                          {detections.slice(0, 6).map((detection, detectionIndex) => (
+                                            <em key={`${prediction.id}-${detectionIndex}`}>
+                                              {detectionLabel(detection)}
+                                            </em>
+                                          ))}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  </article>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="empty-state empty-state--compact">
+                              <p>{t("inference.noResultImage")}</p>
+                              <small>{t("inference.noResultImageHelp")}</small>
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
               </div>
             ) : (
               <div className="empty-state empty-state--compact">
@@ -2154,66 +2828,176 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
               </div>
             )}
 
-            {selectedInferenceRun ? (
-              <div className="inference-results">
-                <div className="panel__header panel__header--compact">
-                  <div>
-                    <p className="section-label">Predictions</p>
-                    <h2>{t("inference.results")}</h2>
-                  </div>
-                  {inferencePredictionsQuery.isFetching ? (
-                    <Loader2 aria-hidden="true" className="spin" size={18} />
-                  ) : null}
-                </div>
-
-                {selectedInferenceRun.status !== "completed" ? (
-                  <div className="empty-state empty-state--compact">
-                    <p>{t("inference.resultsPending")}</p>
-                    <small>{t("inference.resultsPendingHelp")}</small>
-                  </div>
-                ) : inferencePredictions.length > 0 ? (
-                  <div className="prediction-grid">
-                    {inferencePredictions.map((prediction) => {
-                      const detections = predictionDetections(prediction);
-                      return (
-                        <article className="prediction-card" key={prediction.id}>
-                          <img
-                            alt={t("inference.resultAlt", { name: fileName(prediction.image_path) })}
-                            src={apiUrl(
-                              `/api/projects/${projectId}/inference-runs/${selectedInferenceRun.id}/predictions/${prediction.id}/image`,
-                            )}
-                          />
-                          <div className="prediction-card__body">
-                            <strong>{fileName(prediction.image_path)}</strong>
-                            <span>
-                              {t("inference.objectCount", {
-                                count: detections.length,
-                                confidence: prediction.max_confidence.toFixed(2),
-                              })}
-                            </span>
-                            {detections.length > 0 ? (
-                              <div className="prediction-tags">
-                                {detections.slice(0, 6).map((detection, index) => (
-                                  <em key={`${prediction.id}-${index}`}>
-                                    {detectionLabel(detection)}
-                                  </em>
-                                ))}
-                              </div>
-                            ) : null}
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="empty-state empty-state--compact">
-                    <p>{t("inference.noResultImage")}</p>
-                    <small>{t("inference.noResultImageHelp")}</small>
-                  </div>
-                )}
+            {deleteInferenceRun.isError ? (
+              <div className="notice notice--danger" role="alert">
+                {deleteInferenceRun.error instanceof Error
+                  ? deleteInferenceRun.error.message
+                  : t("inference.deleteError")}
               </div>
             ) : null}
           </div>
+
+          {inferenceDialogOpen ? (
+            <div className="modal-backdrop" role="presentation">
+              <div
+                aria-labelledby="inference-create-title"
+                aria-modal="true"
+                className="modal-panel modal-panel--wide"
+                role="dialog"
+              >
+                <form className="modal-form" onSubmit={handleInferenceSubmit}>
+                  <div className="panel__header">
+                    <div>
+                      <h2 id="inference-create-title">{t("inference.new")}</h2>
+                    </div>
+                    <button
+                      aria-label={t("inference.closeCreate")}
+                      className="icon-button"
+                      onClick={closeInferenceDialog}
+                      type="button"
+                    >
+                      <X aria-hidden="true" size={17} />
+                    </button>
+                  </div>
+
+                  <label className="field">
+                    <span>{t("form.name")}</span>
+                    <input
+                      onChange={(event) => setInferenceName(event.target.value)}
+                      placeholder={t("inference.namePlaceholder")}
+                      required
+                      type="text"
+                      value={inferenceName}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>{t("inference.model")}</span>
+                    <select
+                      disabled={artifactOptions.length === 0}
+                      onChange={(event) => setInferenceArtifactId(event.target.value)}
+                      required
+                      value={selectedInferenceArtifactId}
+                    >
+                      {artifactOptions.map((option) => (
+                        <option key={option.artifact.id} value={option.artifact.id}>
+                          {artifactOptionLabel(option)} - {fileName(option.artifact.path)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  {artifactOptions.length === 0 ? (
+                    <div className="empty-state empty-state--compact">
+                      <p>{t("inference.availableModelEmpty")}</p>
+                      <small>{t("inference.availableModelHelp")}</small>
+                    </div>
+                  ) : null}
+
+                  <label className="field">
+                    <span>{t("inference.inputType")}</span>
+                    <select
+                      aria-label={t("inference.inputTypeLabel")}
+                      onChange={(event) => {
+                        setInferenceInputType(event.target.value as "image" | "folder");
+                        setInferenceFiles([]);
+                      }}
+                      value={inferenceInputType}
+                    >
+                      <option value="folder">{t("inference.folder")}</option>
+                      <option value="image">{t("inference.image")}</option>
+                    </select>
+                  </label>
+
+                  <DatasetUploadPicker
+                    accept=".jpg,.jpeg,.png,.bmp,.webp"
+                    description={
+                      inferenceInputType === "folder"
+                        ? t("inference.folderDescription")
+                        : t("inference.imageDescription")
+                    }
+                    directory={inferenceInputType === "folder"}
+                    files={inferenceFiles}
+                    inputLabel={
+                      inferenceInputType === "folder"
+                        ? t("inference.folderSelect")
+                        : t("inference.imageSelect")
+                    }
+                    kind="inference_input"
+                    multiple={inferenceInputType === "folder"}
+                    onFilesChange={(files) =>
+                      setInferenceFiles(inferenceInputType === "folder" ? files : files.slice(0, 1))
+                    }
+                    title={inferenceInputType === "folder" ? t("dataset.imageFolder") : t("inference.image")}
+                  />
+
+                  <div className="field-row field-row--two">
+                    <label className="field">
+                      <FieldLabel help={t("inference.help.conf")} label="conf" />
+                      <input
+                        max={1}
+                        min={0}
+                        onChange={(event) =>
+                          updateInferenceNumberConfig("conf", event.target.valueAsNumber)
+                        }
+                        step={0.01}
+                        type="number"
+                        value={inferenceConfig.conf}
+                      />
+                    </label>
+                    <label className="field">
+                      <FieldLabel help={t("inference.help.imgsz")} label="imgsz" />
+                      <input
+                        min={1}
+                        onChange={(event) =>
+                          updateInferenceNumberConfig("imgsz", event.target.valueAsNumber)
+                        }
+                        step={1}
+                        type="number"
+                        value={inferenceConfig.imgsz}
+                      />
+                    </label>
+                  </div>
+
+                  {createInferenceRun.isError ? (
+                    <div className="notice notice--danger" role="alert">
+                      {createInferenceRun.error instanceof Error
+                        ? createInferenceRun.error.message
+                        : t("inference.createError")}
+                    </div>
+                  ) : null}
+
+                  <div className="modal-actions">
+                    <button
+                      className="secondary-button"
+                      disabled={createInferenceRun.isPending}
+                      onClick={closeInferenceDialog}
+                      type="button"
+                    >
+                      {t("projects.cancel")}
+                    </button>
+                    <button
+                      className="primary-button"
+                      disabled={
+                        !inferenceName.trim() ||
+                        !selectedInferenceArtifactId ||
+                        inferenceFiles.length === 0 ||
+                        createInferenceRun.isPending
+                      }
+                      type="submit"
+                    >
+                      {createInferenceRun.isPending ? (
+                        <Loader2 aria-hidden="true" className="spin" size={17} />
+                      ) : (
+                        <Play aria-hidden="true" size={17} />
+                      )}
+                      <span>{t("inference.start")}</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : null}
     </div>

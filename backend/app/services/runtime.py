@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import asdict, dataclass
 from importlib import metadata as importlib_metadata
 from importlib.metadata import PackageNotFoundError
@@ -8,6 +9,10 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+
+from app.services.dataset_validation import validate_yolo_dataset
+from app.core.config import settings
+from app.services.training import build_yolo_train_command
 
 
 REQUIRED_PACKAGES = {
@@ -168,16 +173,23 @@ def _detect_accelerators() -> list[RuntimeDevice]:
     return devices
 
 
+def _command_string(args: list[str]) -> str:
+    if sys.platform == "win32":
+        return subprocess.list2cmdline(args)
+    return shlex.join(args)
+
+
 def _install_options(devices: list[RuntimeDevice]) -> list[InstallOption]:
-    runtime_python = RUNTIME_ROOT / "venv" / "bin" / "python"
+    runtime_python = _managed_runtime_bin("python")
+    venv_root = RUNTIME_ROOT / "venv"
     options = [
         InstallOption(
             profile="cpu",
             label="CPU runtime",
             commands=[
-                f"{sys.executable} -m venv {RUNTIME_ROOT / 'venv'}",
-                f"{runtime_python} -m pip install --upgrade pip",
-                f"{runtime_python} -m pip install torch torchvision ultralytics",
+                _command_string([sys.executable, "-m", "venv", str(venv_root)]),
+                _command_string([str(runtime_python), "-m", "pip", "install", "--upgrade", "pip"]),
+                _command_string([str(runtime_python), "-m", "pip", "install", "torch", "torchvision", "ultralytics"]),
             ],
         ),
     ]
@@ -187,10 +199,19 @@ def _install_options(devices: list[RuntimeDevice]) -> list[InstallOption]:
                 profile="cuda",
                 label="NVIDIA CUDA runtime",
                 commands=[
-                    f"{sys.executable} -m venv {RUNTIME_ROOT / 'venv'}",
-                    f"{runtime_python} -m pip install --upgrade pip",
-                    f"{runtime_python} -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121",
-                    f"{runtime_python} -m pip install ultralytics",
+                    _command_string([sys.executable, "-m", "venv", str(venv_root)]),
+                    _command_string([str(runtime_python), "-m", "pip", "install", "--upgrade", "pip"]),
+                    _command_string([
+                        str(runtime_python),
+                        "-m",
+                        "pip",
+                        "install",
+                        "torch",
+                        "torchvision",
+                        "--index-url",
+                        "https://download.pytorch.org/whl/cu121",
+                    ]),
+                    _command_string([str(runtime_python), "-m", "pip", "install", "ultralytics"]),
                 ],
             )
         )
@@ -277,6 +298,7 @@ def build_training_preflight(
     dataset,
     split,
     config: dict,
+    model_name: str,
     runtime_check: dict,
 ) -> dict:
     blocking_issues: list[str] = []
@@ -308,13 +330,20 @@ def build_training_preflight(
     elif selected_device.get("kind") == "cpu":
         warnings.append("CPU 학습은 가능하지만 데이터셋과 설정에 따라 매우 느릴 수 있습니다.")
 
-    validation_summary = dataset.validation_summary or {}
-    for error in validation_summary.get("errors", []) or []:
-        blocking_issues.append(f"데이터셋 오류: {error}")
-    for warning in validation_summary.get("warnings", []) or []:
-        warnings.append(f"데이터셋 경고: {warning}")
+    validation_root = Path(split.dataset_yaml_path).parent if split.dataset_yaml_path else Path(split.split_path)
+    try:
+        validation = validate_yolo_dataset(validation_root)
+    except Exception as exc:
+        validation = None
+        blocking_issues.append(f"데이터셋 오류: {exc}")
 
-    image_count = int(dataset.image_count or 0)
+    if validation is not None:
+        for error in validation.errors:
+            blocking_issues.append(f"데이터셋 오류: {error}")
+        for warning in validation.warnings:
+            warnings.append(f"데이터셋 경고: {warning}")
+
+    image_count = validation.image_count if validation is not None else int(dataset.image_count or 0)
     if image_count < 20:
         recommendations.append("데이터셋 이미지 수가 적습니다. 먼저 작은 epochs로 빠르게 검증하세요.")
 
@@ -326,6 +355,17 @@ def build_training_preflight(
         suggested_config["batch"] = min(int(config.get("batch", 16)), 8)
         suggested_config["imgsz"] = min(int(config.get("imgsz", 640)), 640)
 
+    yolo_executable = runtime_check.get("yolo_cli", {}).get("path") or runtime_yolo_executable()
+    run_parent = settings.artifact_root / "projects" / dataset.project_id / "runs" / "train"
+    command = build_yolo_train_command(
+        yolo_executable=str(yolo_executable),
+        model_name=model_name,
+        data_yaml_path=Path(split.dataset_yaml_path),
+        config=config,
+        run_parent=run_parent,
+        run_name="<new-run-id>",
+    )
+
     return {
         "can_start": not blocking_issues,
         "blocking_issues": blocking_issues,
@@ -335,4 +375,9 @@ def build_training_preflight(
         "selected_device": selected_device,
         "runtime": runtime_check,
         "suggested_config": suggested_config,
+        "command_preview": {
+            "kind": "yolo_cli",
+            "argv": command,
+            "shell": shlex.join(command),
+        },
     }

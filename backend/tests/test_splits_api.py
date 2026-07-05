@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import SessionLocal
-from app.models import DatasetSplit
+from app.models import DatasetSplit, TrainingRun
 
 
 def _split_rows() -> list[DatasetSplit]:
@@ -53,21 +54,37 @@ def _create_dataset(client, project_id: str, dataset_path: Path) -> str:
 
 def test_create_and_list_splits(client, tmp_path):
     project_id = _create_project(client)
-    dataset_id = _create_dataset(client, project_id, _make_dataset(tmp_path / "dataset"))
+    dataset_id = _create_dataset(
+        client, project_id, _make_dataset(tmp_path / "dataset", image_count=10)
+    )
 
     response = client.post(
         f"/api/projects/{project_id}/datasets/{dataset_id}/splits",
-        json={"name": "split-80-20", "train_ratio": 0.75, "val_ratio": 0.25, "seed": 42},
+        json={
+            "name": "split-80-10-10",
+            "train_ratio": 0.8,
+            "val_ratio": 0.1,
+            "test_ratio": 0.1,
+            "seed": 42,
+        },
     )
 
     assert response.status_code == 201
     body = response.json()
+    assert re.fullmatch(r"spl_[2-9a-z]{10}", body["id"])
     assert body["dataset_id"] == dataset_id
-    assert body["name"] == "split-80-20"
-    assert body["train_count"] == 3
+    assert body["name"] == "split-80-10-10"
+    assert body["train_ratio"] == 0.8
+    assert body["val_ratio"] == 0.1
+    assert body["test_ratio"] == 0.1
+    assert body["train_count"] == 8
     assert body["val_count"] == 1
+    assert body["test_count"] == 1
     assert Path(body["split_path"]).exists()
     assert Path(body["dataset_yaml_path"]).exists()
+    data_yaml = yaml.safe_load(Path(body["dataset_yaml_path"]).read_text(encoding="utf-8"))
+    assert data_yaml["test"] == "images/test"
+    assert (Path(body["split_path"]) / "images" / "test").exists()
 
     list_response = client.get(f"/api/projects/{project_id}/datasets/{dataset_id}/splits")
 
@@ -75,6 +92,84 @@ def test_create_and_list_splits(client, tmp_path):
     splits = list_response.json()
     assert len(splits) == 1
     assert splits[0]["id"] == body["id"]
+    assert splits[0]["test_count"] == 1
+
+
+def test_update_split_name(client, tmp_path):
+    project_id = _create_project(client)
+    dataset_id = _create_dataset(client, project_id, _make_dataset(tmp_path / "dataset"))
+    created = client.post(
+        f"/api/projects/{project_id}/datasets/{dataset_id}/splits",
+        json={"name": "split-80-20", "train_ratio": 0.75, "val_ratio": 0.25, "seed": 42},
+    )
+    assert created.status_code == 201
+    split_id = created.json()["id"]
+
+    response = client.patch(
+        f"/api/projects/{project_id}/datasets/{dataset_id}/splits/{split_id}",
+        json={"name": "split-renamed"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == split_id
+    assert body["name"] == "split-renamed"
+    assert body["train_count"] == 3
+
+
+def test_delete_split_removes_record_and_artifact_directory(client, tmp_path):
+    project_id = _create_project(client)
+    dataset_id = _create_dataset(client, project_id, _make_dataset(tmp_path / "dataset"))
+    created = client.post(
+        f"/api/projects/{project_id}/datasets/{dataset_id}/splits",
+        json={"name": "split-80-20", "train_ratio": 0.75, "val_ratio": 0.25, "seed": 42},
+    )
+    assert created.status_code == 201
+    split_id = created.json()["id"]
+    split_path = Path(created.json()["split_path"])
+    assert split_path.exists()
+
+    response = client.delete(
+        f"/api/projects/{project_id}/datasets/{dataset_id}/splits/{split_id}",
+    )
+
+    assert response.status_code == 204
+    assert _split_rows() == []
+    assert not split_path.exists()
+
+
+def test_delete_split_rejects_split_used_by_training_run(client, tmp_path):
+    project_id = _create_project(client)
+    dataset_id = _create_dataset(client, project_id, _make_dataset(tmp_path / "dataset"))
+    created = client.post(
+        f"/api/projects/{project_id}/datasets/{dataset_id}/splits",
+        json={"name": "split-80-20", "train_ratio": 0.75, "val_ratio": 0.25, "seed": 42},
+    )
+    assert created.status_code == 201
+    split_id = created.json()["id"]
+    with SessionLocal() as db:
+        db.add(
+            TrainingRun(
+                id="training-uses-split",
+                project_id=project_id,
+                dataset_id=dataset_id,
+                split_id=split_id,
+                name="train",
+                model_name="yolov8n",
+                trainer="ultralytics",
+                status="queued",
+                config={},
+                metrics_summary={},
+            )
+        )
+        db.commit()
+
+    response = client.delete(
+        f"/api/projects/{project_id}/datasets/{dataset_id}/splits/{split_id}",
+    )
+
+    assert response.status_code == 400
+    assert [split.id for split in _split_rows()] == [split_id]
 
 
 def test_create_split_rejects_invalid_ratio(client, tmp_path):
@@ -83,7 +178,13 @@ def test_create_split_rejects_invalid_ratio(client, tmp_path):
 
     response = client.post(
         f"/api/projects/{project_id}/datasets/{dataset_id}/splits",
-        json={"name": "bad-split", "train_ratio": 0.8, "val_ratio": 0.3, "seed": 42},
+        json={
+            "name": "bad-split",
+            "train_ratio": 0.8,
+            "val_ratio": 0.2,
+            "test_ratio": 0.2,
+            "seed": 42,
+        },
     )
 
     assert response.status_code == 400
@@ -95,7 +196,13 @@ def test_create_split_rejects_out_of_range_ratio_with_400(client, tmp_path):
 
     response = client.post(
         f"/api/projects/{project_id}/datasets/{dataset_id}/splits",
-        json={"name": "bad-split", "train_ratio": -0.1, "val_ratio": 1.1, "seed": 42},
+        json={
+            "name": "bad-split",
+            "train_ratio": -0.1,
+            "val_ratio": 0.6,
+            "test_ratio": 0.5,
+            "seed": 42,
+        },
     )
 
     assert response.status_code == 400

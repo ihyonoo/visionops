@@ -1,16 +1,18 @@
-import uuid
+import shutil
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import get_db
-from app.models import InferencePrediction, InferenceRun, ModelArtifact, Project, TrainingRun
+from app.models import InferencePrediction, InferenceRun, Job, ModelArtifact, Project, TrainingRun
 from app.schemas import InferencePredictionRead, InferenceRunCreate, InferenceRunRead
+from app.services.ids import new_id
 from app.services.jobs import enqueue_job
 from app.services.storage import StoragePaths
 
@@ -71,8 +73,13 @@ def _validate_input_path(input_type: str, input_path: str) -> None:
         )
 
 
+def _upload_name_parts(filename: str) -> list[str]:
+    normalized_filename = filename.replace("\\", "/")
+    return [part for part in PurePosixPath(normalized_filename).parts if part not in {"", ".", ".."}]
+
+
 def _normalize_upload_name(filename: str) -> Path:
-    parts = [part for part in Path(filename).parts if part not in {"", ".", ".."}]
+    parts = _upload_name_parts(filename)
     if not parts:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -100,10 +107,16 @@ def _store_inference_uploads(
     *, project_id: str, run_id: str, input_type: str, files: list[UploadFile]
 ) -> Path:
     _require_image_uploads(files)
-    if input_type == "image" and len(files) != 1:
+    has_folder_paths = any(len(_upload_name_parts(file.filename or "")) > 1 for file in files)
+    if input_type == "image" and (len(files) != 1 or has_folder_paths):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="단일 이미지 추론에는 이미지 1개만 선택하세요.",
+            detail="단일 이미지 추론에는 이미지 파일 1개만 선택하세요.",
+        )
+    if input_type == "folder" and not has_folder_paths:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="폴더 추론에는 이미지 폴더를 선택하세요.",
         )
 
     input_root = StoragePaths(settings.artifact_root).inference_input_dir(project_id, run_id).resolve()
@@ -131,6 +144,29 @@ def _require_inference_run(db: Session, project_id: str, run_id: str) -> Inferen
     return run
 
 
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _remove_managed_path(path: Path | None, managed_root: Path) -> None:
+    if path is None or not _is_relative_to(path, managed_root) or not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _managed_inference_roots(project_id: str) -> tuple[Path, Path]:
+    artifact_root = StoragePaths(settings.artifact_root).ensure_root()
+    project_root = artifact_root / "projects" / project_id
+    return project_root / "runs" / "inference", project_root / "runs" / "inference_inputs"
+
+
 @router.post("", response_model=InferenceRunRead, status_code=status.HTTP_201_CREATED)
 def create_inference_run(
     project_id: str,
@@ -140,7 +176,7 @@ def create_inference_run(
     artifact, _training_run = _require_project_artifact(db, project_id, payload.model_artifact_id)
     _validate_input_path(payload.input_type, payload.input_path)
     run = InferenceRun(
-        id=uuid.uuid4().hex,
+        id=new_id("inf"),
         project_id=project_id,
         model_artifact_id=artifact.id,
         name=payload.name,
@@ -176,7 +212,7 @@ def upload_inference_run(
             detail="지원하지 않는 추론 입력 유형입니다.",
         )
 
-    run_id = uuid.uuid4().hex
+    run_id = new_id("inf")
     input_path = _store_inference_uploads(
         project_id=project_id,
         run_id=run_id,
@@ -224,6 +260,27 @@ def get_inference_run(
     return _require_inference_run(db, project_id, run_id)
 
 
+@router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_inference_run(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    run = _require_inference_run(db, project_id, run_id)
+    output_root, input_root = _managed_inference_roots(project_id)
+    output_path = Path(run.output_path) if run.output_path else None
+    input_path = Path(run.input_path)
+    managed_input_path = input_path.parent if run.input_type == "image" else input_path
+
+    db.execute(delete(InferencePrediction).where(InferencePrediction.inference_run_id == run.id))
+    db.execute(delete(Job).where(Job.type == "inference", Job.target_id == run.id))
+    db.delete(run)
+    db.commit()
+
+    _remove_managed_path(output_path, output_root)
+    _remove_managed_path(managed_input_path, input_root)
+
+
 @router.get("/{run_id}/predictions", response_model=list[InferencePredictionRead])
 def list_inference_predictions(
     project_id: str,
@@ -253,10 +310,21 @@ def get_inference_prediction_image(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="추론 결과 이미지를 찾을 수 없습니다.",
         )
+    if not prediction.output_image_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="추론 결과 이미지 파일을 찾을 수 없습니다.",
+        )
     image_path = Path(prediction.output_image_path)
     if not image_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="추론 결과 이미지 파일을 찾을 수 없습니다.",
         )
-    return FileResponse(image_path)
+    return FileResponse(
+        image_path,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )

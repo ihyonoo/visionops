@@ -1,3 +1,5 @@
+import re
+
 from fastapi.testclient import TestClient
 from PIL import Image
 import pytest
@@ -36,6 +38,7 @@ def test_create_list_and_get_project(client):
     )
     assert created.status_code == 201
     body = created.json()
+    assert re.fullmatch(r"prj_[2-9a-z]{10}", body["id"])
     assert body["name"] == "factory"
     assert body["description"] == "defects"
     assert body["task_type"] == "detection"

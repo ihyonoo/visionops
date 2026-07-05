@@ -1,10 +1,11 @@
 import csv
-import uuid
+import mimetypes
+import re
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,18 +13,40 @@ from app.db import SessionLocal, get_db
 from app.models import Dataset, DatasetSplit, Job, ModelArtifact, Project, TrainingRun
 from app.schemas import (
     ModelArtifactRead,
+    TrainingDownloadRead,
     TrainingLogRead,
     TrainingMetricsRead,
     TrainingPreflightRead,
     TrainingRunCreate,
     TrainingRunRead,
 )
+from app.services.ids import new_id
 from app.services.jobs import CANCELLED, enqueue_job
 from app.services.logs import stream_log, tail_log_with_offset
 from app.services.metrics import read_results_csv, summarize_metrics
 from app.services.runtime import build_training_preflight, check_runtime
 
 router = APIRouter(prefix="/api/projects/{project_id}/training-runs", tags=["training"])
+
+REPORT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+EXCLUDED_REPORT_IMAGE_PREFIXES = ("train_", "train-", "train_batch", "val_", "val-", "val_batch")
+THUMBNAIL_IMAGE_PATTERNS = (
+    "val_batch*_pred.jpg",
+    "val_batch*_pred.jpeg",
+    "val_batch*_pred.png",
+    "val_batch*_labels.jpg",
+    "val_batch*_labels.jpeg",
+    "val_batch*_labels.png",
+    "results.png",
+    "confusion_matrix.png",
+    "confusion_matrix_normalized.png",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+)
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+SAVE_DIR_PATTERN = re.compile(r"save_dir=([^,\n\r]+)")
+RESULTS_SAVED_PATTERN = re.compile(r"Results saved to\s+([^\n\r]+)")
 
 
 def _require_project(db: Session, project_id: str) -> Project:
@@ -59,6 +82,137 @@ def _require_training_run(db: Session, project_id: str, run_id: str) -> Training
     return run
 
 
+def _strip_ansi(value: str) -> str:
+    return ANSI_ESCAPE_PATTERN.sub("", value)
+
+
+def _logged_training_save_dir(run: TrainingRun) -> Path | None:
+    if not run.log_path:
+        return None
+    log_path = Path(run.log_path)
+    if not log_path.is_file():
+        return None
+    try:
+        log_text = _strip_ansi(log_path.read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        return None
+    matches = [
+        (match.start(), match.group(1))
+        for pattern in (SAVE_DIR_PATTERN, RESULTS_SAVED_PATTERN)
+        for match in pattern.finditer(log_text)
+    ]
+    for _position, raw_path in sorted(matches, reverse=True):
+        candidate = Path(raw_path.strip().strip("'\"`")).expanduser()
+        if candidate.is_dir():
+            return candidate.resolve()
+    return None
+
+
+def _require_training_artifact(
+    db: Session, project_id: str, run_id: str, artifact_id: str
+) -> ModelArtifact:
+    run = _require_training_run(db, project_id, run_id)
+    artifact = db.get(ModelArtifact, artifact_id)
+    if artifact is None or artifact.training_run_id != run.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="모델 파일을 찾을 수 없습니다.",
+        )
+    artifact_path = Path(artifact.path)
+    if not artifact_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="모델 파일을 찾을 수 없습니다.",
+        )
+    return artifact
+
+
+def _training_run_artifact_dir(run: TrainingRun) -> Path:
+    if run.artifact_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="학습 산출물 경로를 찾을 수 없습니다.",
+        )
+    artifact_dir = Path(run.artifact_path).resolve()
+    logged_save_dir = _logged_training_save_dir(run)
+    if logged_save_dir is not None and logged_save_dir != artifact_dir:
+        has_report_outputs = any(
+            (logged_save_dir / filename).is_file()
+            for filename in ("args.yaml", "results.png", "confusion_matrix.png")
+        )
+        if has_report_outputs:
+            return logged_save_dir
+    if not artifact_dir.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="학습 산출물 경로를 찾을 수 없습니다.",
+        )
+    return artifact_dir
+
+
+def _download_url(project_id: str, run_id: str, filename: str) -> str:
+    return f"/api/projects/{project_id}/training-runs/{run_id}/downloads/{filename}"
+
+
+def _is_report_image(path: Path) -> bool:
+    filename = path.name.lower()
+    if path.suffix.lower() not in REPORT_IMAGE_EXTENSIONS:
+        return False
+    return not filename.startswith(EXCLUDED_REPORT_IMAGE_PREFIXES)
+
+
+def _static_training_downloads(project_id: str, run: TrainingRun, artifact_dir: Path) -> list[dict]:
+    downloads: list[dict] = []
+    results_csv_path = artifact_dir / "results.csv"
+    if results_csv_path.is_file():
+        downloads.append(
+            {
+                "filename": "results.csv",
+                "label": "results.csv",
+                "kind": "metrics",
+                "url": f"/api/projects/{project_id}/training-runs/{run.id}/results.csv",
+            }
+        )
+
+    args_yaml_path = artifact_dir / "args.yaml"
+    if args_yaml_path.is_file():
+        downloads.append(
+            {
+                "filename": "args.yaml",
+                "label": "args.yaml",
+                "kind": "config",
+                "url": _download_url(project_id, run.id, "args.yaml"),
+            }
+        )
+
+    report_images = sorted(
+        (path for path in artifact_dir.iterdir() if path.is_file() and _is_report_image(path)),
+        key=lambda path: path.name,
+    )
+    downloads.extend(
+        {
+            "filename": path.name,
+            "label": path.name,
+            "kind": "report_image",
+            "url": _download_url(project_id, run.id, path.name),
+        }
+        for path in report_images
+    )
+    return downloads
+
+
+def _training_thumbnail_path(artifact_dir: Path) -> Path | None:
+    for pattern in THUMBNAIL_IMAGE_PATTERNS:
+        candidates = sorted(
+            path
+            for path in artifact_dir.glob(pattern)
+            if path.is_file() and path.suffix.lower() in REPORT_IMAGE_EXTENSIONS
+        )
+        if candidates:
+            return candidates[0]
+    return None
+
+
 @router.post("", response_model=TrainingRunRead, status_code=status.HTTP_201_CREATED)
 def create_training_run(
     project_id: str,
@@ -67,7 +221,7 @@ def create_training_run(
 ) -> TrainingRun:
     dataset, split = _require_project_split(db, project_id, payload.split_id)
     run = TrainingRun(
-        id=uuid.uuid4().hex,
+        id=new_id("trn"),
         project_id=project_id,
         dataset_id=dataset.id,
         split_id=split.id,
@@ -96,6 +250,7 @@ def preflight_training_run(
         dataset=dataset,
         split=split,
         config=payload.config.model_dump(),
+        model_name=payload.model_name,
         runtime_check=check_runtime(),
     )
 
@@ -220,3 +375,135 @@ def list_training_run_artifacts(
         .order_by(ModelArtifact.kind.asc(), ModelArtifact.created_at.asc())
     )
     return list(db.scalars(statement))
+
+
+@router.get("/{run_id}/artifacts/{artifact_id}/download")
+def download_training_run_artifact(
+    project_id: str,
+    run_id: str,
+    artifact_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> FileResponse:
+    artifact = _require_training_artifact(db, project_id, run_id, artifact_id)
+    artifact_path = Path(artifact.path)
+    return FileResponse(
+        artifact_path,
+        filename=artifact_path.name,
+        media_type="application/octet-stream",
+    )
+
+
+@router.get("/{run_id}/downloads", response_model=list[TrainingDownloadRead])
+def list_training_run_downloads(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[dict]:
+    run = _require_training_run(db, project_id, run_id)
+    try:
+        artifact_dir = _training_run_artifact_dir(run)
+    except HTTPException:
+        return []
+    downloads = _static_training_downloads(project_id, run, artifact_dir)
+
+    statement = (
+        select(ModelArtifact)
+        .where(ModelArtifact.training_run_id == run.id)
+        .order_by(ModelArtifact.kind.asc(), ModelArtifact.created_at.asc())
+    )
+    artifacts = [
+        artifact
+        for artifact in db.scalars(statement)
+        if Path(artifact.path).is_file()
+    ]
+    model_downloads = [
+        {
+            "filename": Path(artifact.path).name,
+            "label": Path(artifact.path).name,
+            "kind": f"model_{artifact.kind}",
+            "url": f"/api/projects/{project_id}/training-runs/{run.id}/artifacts/{artifact.id}/download",
+        }
+        for artifact in artifacts
+    ]
+    return [*downloads[:1], *model_downloads, *downloads[1:]]
+
+
+@router.get("/{run_id}/thumbnail")
+def get_training_run_thumbnail(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> FileResponse:
+    run = _require_training_run(db, project_id, run_id)
+    artifact_dir = _training_run_artifact_dir(run)
+    thumbnail_path = _training_thumbnail_path(artifact_dir)
+    if thumbnail_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="학습 썸네일 이미지를 찾을 수 없습니다.",
+        )
+    return FileResponse(
+        thumbnail_path,
+        filename=thumbnail_path.name,
+        media_type=mimetypes.guess_type(thumbnail_path.name)[0] or "application/octet-stream",
+    )
+
+
+@router.get("/{run_id}/downloads/{filename}")
+def download_training_run_file(
+    project_id: str,
+    run_id: str,
+    filename: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> FileResponse:
+    run = _require_training_run(db, project_id, run_id)
+    artifact_dir = _training_run_artifact_dir(run).resolve()
+    file_path = (artifact_dir / filename).resolve()
+    if file_path.parent != artifact_dir:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="학습 산출물 파일을 찾을 수 없습니다.",
+        )
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="학습 산출물 파일을 찾을 수 없습니다.",
+        )
+    allowed_names = {
+        item["filename"]
+        for item in _static_training_downloads(project_id, run, artifact_dir)
+    }
+    if file_path.name not in allowed_names:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="학습 산출물 파일을 찾을 수 없습니다.",
+        )
+    return FileResponse(
+        file_path,
+        filename=file_path.name,
+        media_type="application/octet-stream",
+    )
+
+
+@router.get("/{run_id}/results.csv")
+def download_training_results_csv(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> FileResponse:
+    run = _require_training_run(db, project_id, run_id)
+    try:
+        artifact_dir = _training_run_artifact_dir(run)
+    except HTTPException:
+        artifact_dir = None
+    results_csv_path = artifact_dir / "results.csv" if artifact_dir is not None else None
+    if results_csv_path is None or not results_csv_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="results.csv 파일을 찾을 수 없습니다.",
+        )
+    return FileResponse(
+        results_csv_path,
+        filename="results.csv",
+        media_type="text/csv",
+    )

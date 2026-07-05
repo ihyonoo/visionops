@@ -77,6 +77,21 @@ def test_build_yolo_train_command_matches_ultralytics_cli_shape(tmp_path):
     ]
 
 
+def test_build_yolo_train_command_resolves_project_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    command = build_yolo_train_command(
+        model_name="yolov8n",
+        data_yaml_path=Path("data.yaml"),
+        config={},
+        run_parent=Path("relative-runs"),
+        run_name="run-1",
+    )
+
+    assert f"data={tmp_path / 'data.yaml'}" in command
+    assert f"project={tmp_path / 'relative-runs'}" in command
+
+
 def test_run_yolo_training_writes_stdout_log_and_returns_success(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     _write_fake_yolo(bin_dir)

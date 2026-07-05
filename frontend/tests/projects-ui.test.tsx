@@ -3,19 +3,32 @@ import { act } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { Simulate } from "react-dom/test-utils";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectsPage } from "../src/pages/ProjectsPage";
 import { ProjectDetailPage } from "../src/pages/ProjectDetailPage";
 import { StatusBadge } from "../src/components/StatusBadge";
 import { LogViewer } from "../src/components/LogViewer";
 import { TrainingRunPage } from "../src/pages/TrainingRunPage";
+import { TrainingManagementPage } from "../src/pages/TrainingManagementPage";
 import { Layout } from "../src/components/Layout";
+import { TrainingQueueWidget } from "../src/components/TrainingQueueWidget";
 import { LanguageProvider, useLanguage } from "../src/i18n/LanguageProvider";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
+import App from "../src/App";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
+
+class ResizeObserverMock {
+  disconnect() {}
+  observe() {}
+  unobserve() {}
+}
+
+beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+});
 
 function render(ui: React.ReactElement): { container: HTMLDivElement; root: Root } {
   const container = document.createElement("div");
@@ -36,6 +49,7 @@ afterEach(() => {
     window.localStorage.setItem("visionops-language", "ko");
   }
   document.documentElement.lang = "ko";
+  window.history.replaceState(null, "", "/");
 });
 
 function renderWithQuery(ui: React.ReactElement) {
@@ -295,9 +309,11 @@ describe("ProjectsPage", () => {
 
     const dialog = container.querySelector<HTMLElement>("[role='dialog']");
     const fields = Array.from(dialog?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea") ?? []);
-    const nameInput = fields.find((field) => field.getAttribute("placeholder") === "검수 라인 A") as HTMLInputElement;
+    const nameInput = fields.find(
+      (field) => field.getAttribute("placeholder") === "프로젝트 이름을 입력하세요",
+    ) as HTMLInputElement;
     const descriptionInput = fields.find(
-      (field) => field.getAttribute("placeholder") === "라인 결함 탐지",
+      (field) => field.getAttribute("placeholder") === "프로젝트 설명을 입력하세요",
     ) as HTMLTextAreaElement;
     const form = dialog?.querySelector("form");
 
@@ -434,12 +450,12 @@ describe("ProjectsPage", () => {
 });
 
 describe("Layout", () => {
-  it("shows only global project navigation before a project is selected", () => {
-    const onOpenProjects = vi.fn();
+  it("shows global navigation before a project is selected", () => {
+    const onNavigate = vi.fn();
     const { container, root } = render(
       <Layout
-        currentView="projects"
-        onOpenProjects={onOpenProjects}
+        activeSection="projects"
+        onNavigate={onNavigate}
         title="프로젝트"
       >
         <div />
@@ -452,11 +468,169 @@ describe("Layout", () => {
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='VisionOps']")?.click();
     });
-    expect(onOpenProjects).toHaveBeenCalledTimes(1);
-    expect(container.querySelector<HTMLButtonElement>("[aria-label='프로젝트']")).not.toBeNull();
-    expect(container.textContent).not.toContain("데이터셋");
-    expect(container.textContent).not.toContain("학습");
-    expect(container.textContent).not.toContain("추론");
+    expect(onNavigate).toHaveBeenCalledWith("projects");
+    expect(container.textContent).toContain("프로젝트");
+    expect(container.textContent).toContain("데이터셋");
+    expect(container.textContent).toContain("학습");
+    expect(container.textContent).toContain("추론");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("sorts projects in the sidebar and keeps hidden projects at the bottom", () => {
+    const onSelectProject = vi.fn();
+    const onToggleProjectHidden = vi.fn();
+    const onProjectSortChange = vi.fn();
+    const onCreateProject = vi.fn();
+    const projects = [
+      {
+        created_at: "2026-07-01T00:00:00Z",
+        description: "B",
+        id: "project-b",
+        name: "Beta",
+        task_type: "detection",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+      {
+        created_at: "2026-07-01T00:00:00Z",
+        description: "A",
+        id: "project-a",
+        name: "Alpha",
+        task_type: "detection",
+        updated_at: "2026-07-03T00:00:00Z",
+      },
+      {
+        created_at: "2026-07-01T00:00:00Z",
+        description: "G",
+        id: "project-g",
+        name: "Gamma",
+        task_type: "detection",
+        updated_at: "2026-07-02T00:00:00Z",
+      },
+    ];
+
+    const { container, root } = render(
+      <Layout
+        activeSection="datasets"
+        hiddenProjectIds={["project-a"]}
+        onCreateProject={onCreateProject}
+        onNavigate={vi.fn()}
+        onProjectSortChange={onProjectSortChange}
+        onSelectProject={onSelectProject}
+        onToggleProjectHidden={onToggleProjectHidden}
+        projects={projects}
+        projectSort="name_asc"
+        selectedProjectId="project-b"
+        title="데이터셋"
+      >
+        <div />
+      </Layout>,
+    );
+
+    const projectNames = Array.from(
+      container.querySelectorAll<HTMLElement>(".project-sidebar__row strong"),
+    ).map((element) => element.textContent);
+    expect(projectNames).toEqual(["Beta", "Gamma", "Alpha"]);
+
+    const hiddenProjectButton = container.querySelector<HTMLButtonElement>(
+      ".project-sidebar__row[data-hidden='true'] .project-sidebar__project",
+    );
+    expect(hiddenProjectButton?.disabled).toBe(true);
+
+    act(() => {
+      hiddenProjectButton?.click();
+    });
+    expect(onSelectProject).not.toHaveBeenCalledWith("project-a");
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='Beta 숨기기']")?.click();
+    });
+    expect(onToggleProjectHidden).toHaveBeenCalledWith("project-b");
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".project-sidebar__tools button"))
+        .find((button) => button.textContent === "최신순")
+        ?.click();
+    });
+    expect(onProjectSortChange).toHaveBeenCalledWith("updated_desc");
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='새 프로젝트']")?.click();
+    });
+    expect(onCreateProject).toHaveBeenCalled();
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("resizes, persists, collapses, and restores the project sidebar by dragging", () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      removeItem: (key: string) => storage.delete(key),
+      setItem: (key: string, value: string) => storage.set(key, value),
+    });
+    const projects = [
+      {
+        created_at: "2026-07-01T00:00:00Z",
+        description: "",
+        id: "project-a",
+        name: "Alpha",
+        task_type: "detection",
+        updated_at: "2026-07-01T00:00:00Z",
+      },
+    ];
+
+    const { container, root } = render(
+      <Layout activeSection="datasets" onNavigate={vi.fn()} projects={projects} title="데이터셋">
+        <div />
+      </Layout>,
+    );
+
+    const workspaceBody = container.querySelector<HTMLElement>(".workspace-body");
+    const resizeHandle = container.querySelector<HTMLElement>(".project-sidebar__resize-handle");
+    expect(workspaceBody?.style.getPropertyValue("--project-sidebar-width")).toBe("260px");
+    expect(resizeHandle).not.toBeNull();
+
+    act(() => {
+      resizeHandle?.dispatchEvent(new MouseEvent("pointerdown", { clientX: 260, bubbles: true }));
+      window.dispatchEvent(new MouseEvent("pointermove", { clientX: 360, bubbles: true }));
+      window.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+    });
+
+    expect(workspaceBody?.style.getPropertyValue("--project-sidebar-width")).toBe("360px");
+    expect(localStorage.getItem("visionops:project-sidebar-width")).toBe("360");
+    expect(container.querySelector("[aria-label='프로젝트 사이드바 접기']")).toBeNull();
+    expect(container.querySelector("[aria-label='프로젝트 사이드바 펼치기']")).toBeNull();
+
+    act(() => {
+      resizeHandle?.dispatchEvent(new MouseEvent("pointerdown", { clientX: 360, bubbles: true }));
+      window.dispatchEvent(new MouseEvent("pointermove", { clientX: 80, bubbles: true }));
+      window.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+    });
+
+    expect(workspaceBody?.dataset.sidebarCollapsed).toBe("true");
+    expect(container.querySelector(".project-sidebar")).toBeNull();
+    expect(container.querySelector(".project-sidebar-rail")).not.toBeNull();
+    expect(localStorage.getItem("visionops:project-sidebar-collapsed")).toBe("true");
+
+    const railResizeHandle = container.querySelector<HTMLElement>(
+      ".project-sidebar-rail__resize-handle",
+    );
+    expect(railResizeHandle).not.toBeNull();
+
+    act(() => {
+      railResizeHandle?.dispatchEvent(new MouseEvent("pointerdown", { clientX: 44, bubbles: true }));
+      window.dispatchEvent(new MouseEvent("pointermove", { clientX: 300, bubbles: true }));
+      window.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+    });
+
+    expect(workspaceBody?.dataset.sidebarCollapsed).toBeUndefined();
+    expect(container.querySelector(".project-sidebar")).not.toBeNull();
+    expect(workspaceBody?.style.getPropertyValue("--project-sidebar-width")).toBe("300px");
+    expect(localStorage.getItem("visionops:project-sidebar-collapsed")).toBe("false");
+    expect(localStorage.getItem("visionops:project-sidebar-width")).toBe("300");
 
     act(() => root.unmount());
     container.remove();
@@ -465,8 +639,8 @@ describe("Layout", () => {
   it("shows feedback when header icon buttons are clicked", () => {
     const { container, root } = render(
       <Layout
-        currentView="projects"
-        onOpenProjects={vi.fn()}
+        activeSection="projects"
+        onNavigate={vi.fn()}
         title="프로젝트"
       >
         <div />
@@ -487,8 +661,8 @@ describe("Layout", () => {
     const { container, root } = render(
       <ThemeProvider>
         <Layout
-          currentView="projects"
-          onOpenProjects={vi.fn()}
+          activeSection="projects"
+          onNavigate={vi.fn()}
           title="프로젝트"
         >
           <div />
@@ -523,8 +697,8 @@ describe("Layout", () => {
     const { container, root } = render(
       <ThemeProvider>
         <Layout
-          currentView="projects"
-          onOpenProjects={vi.fn()}
+          activeSection="projects"
+          onNavigate={vi.fn()}
           title="프로젝트"
         >
           <div />
@@ -547,9 +721,458 @@ describe("Layout", () => {
     });
 
     expect(document.documentElement.lang).toBe("en");
-    expect(container.querySelector("[aria-label='Projects']")).not.toBeNull();
+    expect(container.querySelector("[aria-label='Dataset management']")).not.toBeNull();
     expect(container.textContent).toContain("Theme");
     expect(container.textContent).toContain("Language");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+});
+
+describe("TrainingQueueWidget", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("summarizes global training runs and opens a selected run", async () => {
+    const onOpenRun = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/runtime/check")) {
+          return new Response(
+            JSON.stringify({
+              devices: [{ available: true, details: {}, id: "cpu", kind: "cpu", label: "CPU" }],
+              install_options: [],
+              install_required: false,
+              packages: {
+                torch: { installed: true, version: "2.8.0" },
+                torchvision: { installed: true, version: "0.23.0" },
+                ultralytics: { installed: true, version: "8.3.0" },
+              },
+              python: {},
+              ready: true,
+              yolo_cli: { installed: true, path: "/usr/local/bin/yolo" },
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs")) {
+          return new Response(
+            JSON.stringify([
+              {
+                artifact_path: null,
+                config: {},
+                created_at: "2026-07-05T00:00:00Z",
+                dataset_id: "dataset-1",
+                finished_at: null,
+                id: "run-1",
+                log_path: null,
+                metrics_summary: {},
+                model_name: "yolo11n",
+                name: "라인 A 학습",
+                project_id: "project-1",
+                split_id: "split-1",
+                started_at: "2026-07-05T00:00:00Z",
+                status: "running",
+                trainer: "ultralytics",
+                updated_at: "2026-07-05T00:01:00Z",
+              },
+            ]),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-2/training-runs")) {
+          return new Response(
+            JSON.stringify([
+              {
+                artifact_path: null,
+                config: {},
+                created_at: "2026-07-05T00:00:00Z",
+                dataset_id: "dataset-2",
+                finished_at: null,
+                id: "run-2",
+                log_path: null,
+                metrics_summary: {},
+                model_name: "yolo11n",
+                name: "라인 B 학습",
+                project_id: "project-2",
+                split_id: "split-2",
+                started_at: null,
+                status: "queued",
+                trainer: "ultralytics",
+                updated_at: "2026-07-05T00:00:30Z",
+              },
+            ]),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const { container, root } = renderWithQuery(
+      <TrainingQueueWidget
+        onOpenRun={onOpenRun}
+        projects={[
+          {
+            created_at: "2026-07-05T00:00:00Z",
+            description: "",
+            id: "project-1",
+            name: "프로젝트 A",
+            task_type: "detection",
+            updated_at: "2026-07-05T00:00:00Z",
+          },
+          {
+            created_at: "2026-07-05T00:00:00Z",
+            description: "",
+            id: "project-2",
+            name: "프로젝트 B",
+            task_type: "detection",
+            updated_at: "2026-07-05T00:00:00Z",
+          },
+        ]}
+      />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("학습: 실행 1 · 대기 1 · 실패 0 · 최근 라인 A 학습");
+      expect(container.textContent).toContain("환경: PyTorch 2.8.0 · Ultralytics 8.3.0 · YOLO OK · CPU");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>(".training-queue-widget__summary")?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("라인 A 학습");
+      expect(container.textContent).toContain("라인 B 학습");
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".training-queue-widget__row"))
+        .find((button) => button.textContent?.includes("라인 B 학습"))
+        ?.click();
+    });
+
+    expect(onOpenRun).toHaveBeenCalledWith("project-2", "run-2");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+});
+
+describe("App navigation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows a centered no-project state on project-scoped pages", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("not found", { status: 404 })));
+    window.history.replaceState(null, "", "/datasets");
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(<App />);
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/datasets");
+      expect(container.textContent).toContain("프로젝트가 선택되지 않았습니다");
+      expect(container.textContent).toContain("프로젝트 선택");
+      expect(
+        Array.from(container.querySelectorAll<HTMLButtonElement>(".top-nav__button")).find(
+          (button) => button.textContent?.includes("데이터셋"),
+        )?.getAttribute("aria-current"),
+      ).toBe("page");
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("creates a project from the project sidebar on scoped pages", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/projects") && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            created_at: "2026-07-05T00:00:00Z",
+            description: "새 라인",
+            id: "project-new",
+            name: "새 검사 프로젝트",
+            task_type: "detection",
+            updated_at: "2026-07-05T00:00:00Z",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 201 },
+        );
+      }
+      if (url.endsWith("/api/projects")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-new")) {
+        return new Response(
+          JSON.stringify({
+            created_at: "2026-07-05T00:00:00Z",
+            description: "새 라인",
+            id: "project-new",
+            name: "새 검사 프로젝트",
+            task_type: "detection",
+            updated_at: "2026-07-05T00:00:00Z",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      if (url.endsWith("/api/projects/project-new/datasets")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.includes("/api/projects/project-new/training-runs")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.includes("/api/projects/project-new/inference-runs")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/runtime/check")) {
+        return new Response(
+          JSON.stringify({
+            devices: [],
+            install_options: [],
+            install_required: false,
+            packages: {},
+            python: {},
+            ready: true,
+            yolo_cli: {},
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(null, "", "/datasets");
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(<App />);
+    });
+
+    await waitForAssertion(() => {
+      expect(container.querySelector(".project-sidebar")).not.toBeNull();
+      expect(container.textContent).toContain("프로젝트가 선택되지 않았습니다");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>(".project-sidebar__create")?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.querySelector("[role='dialog']")).not.toBeNull();
+    });
+
+    const nameInput = container.querySelector<HTMLInputElement>(
+      "input[placeholder='프로젝트 이름을 입력하세요']",
+    );
+    const descriptionInput = container.querySelector<HTMLTextAreaElement>(
+      "textarea[placeholder='프로젝트 설명을 입력하세요']",
+    );
+    expect(nameInput).not.toBeNull();
+
+    act(() => {
+      setInputValue(nameInput as HTMLInputElement, "새 검사 프로젝트");
+      setTextareaValue(descriptionInput as HTMLTextAreaElement, "새 라인");
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("생성"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/projects/project-new/datasets");
+      expect(fetchMock.mock.calls.some(([url, init]) =>
+        String(url).endsWith("/api/projects") && init?.method === "POST",
+      )).toBe(true);
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("returns to the project list on browser back from a project detail page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/projects/project-1")) {
+          return new Response(
+            JSON.stringify({
+              created_at: "2026-07-01T00:00:00Z",
+              description: "라인 결함 탐지",
+              id: "project-1",
+              name: "검수 라인 A",
+              task_type: "detection",
+              updated_at: "2026-07-02T00:00:00Z",
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects")) {
+          return new Response(
+            JSON.stringify([
+              {
+                created_at: "2026-07-01T00:00:00Z",
+                description: "라인 결함 탐지",
+                id: "project-1",
+                name: "검수 라인 A",
+                task_type: "detection",
+                updated_at: "2026-07-02T00:00:00Z",
+              },
+            ]),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1")) {
+          return new Response(
+            JSON.stringify({
+              created_at: "2026-07-01T00:00:00Z",
+              description: "",
+              id: "project-1",
+              name: "라인 A",
+              root_path: "/tmp/project-1",
+              updated_at: "2026-07-01T00:00:00Z",
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/datasets")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.includes("/api/projects/project-1/training-runs")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.includes("/api/projects/project-1/inference-runs")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/runtime/check")) {
+          return new Response(
+            JSON.stringify({
+              devices: [],
+              install_options: [],
+              install_required: false,
+              packages: {},
+              python: {},
+              ready: true,
+              yolo_cli: {},
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(<App />);
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("검수 라인 A");
+    });
+
+    act(() => {
+      container.querySelector<HTMLElement>("[data-project-row='project-1']")?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/projects/project-1/datasets");
+      expect(container.textContent).toContain("데이터셋");
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".top-nav__button"))
+        .find((button) => button.textContent?.includes("학습"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/projects/project-1/training");
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".top-nav__button"))
+        .find((button) => button.textContent?.includes("추론"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/projects/project-1/inference");
+    });
+
+    act(() => {
+      window.history.back();
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/projects/project-1/training");
+      expect(
+        Array.from(container.querySelectorAll<HTMLButtonElement>(".top-nav__button")).find((button) =>
+          button.textContent?.includes("학습"),
+        )?.getAttribute("aria-current"),
+      ).toBe("page");
+    });
+
+    act(() => {
+      window.history.back();
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/projects/project-1/datasets");
+      expect(
+        Array.from(container.querySelectorAll<HTMLButtonElement>(".top-nav__button")).find((button) =>
+          button.textContent?.includes("데이터셋"),
+        )?.getAttribute("aria-current"),
+      ).toBe("page");
+    });
+
+    act(() => {
+      window.history.back();
+    });
+
+    await waitForAssertion(() => {
+      expect(window.location.pathname).toBe("/");
+      expect(container.querySelector("[data-project-row='project-1']")).not.toBeNull();
+    });
 
     act(() => root.unmount());
     container.remove();
@@ -559,6 +1182,522 @@ describe("Layout", () => {
 describe("ProjectDetailPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("shows dataset inventory summary inside each dataset row", async () => {
+    const dataset = {
+      class_names: ["scratch", "dent", "void", "stain"],
+      created_at: "2026-07-02T00:00:00Z",
+      format: "yolo",
+      id: "dataset-1",
+      image_count: 12,
+      label_count: 11,
+      name: "불량 샘플",
+      project_id: "project-1",
+      source_path: "/data/project-1",
+      validation_status: "valid",
+      validation_summary: {
+        errors: [],
+        warnings: ["Missing label for image: images/missing.jpg"],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/projects/project-1")) {
+          return new Response(
+            JSON.stringify({
+              created_at: "2026-07-01T00:00:00Z",
+              description: "",
+              id: "project-1",
+              name: "검수 라인 A",
+              task_type: "detection",
+              updated_at: "2026-07-02T00:00:00Z",
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/datasets")) {
+          return new Response(JSON.stringify([dataset]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets/dataset-1")) {
+          return new Response(JSON.stringify(dataset), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets/dataset-1/splits")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const onTabChange = vi.fn();
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="datasets" onTabChange={onTabChange} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("불량 샘플");
+    });
+
+    const datasetRow = container.querySelector<HTMLElement>(".dataset-row");
+    expect(datasetRow?.textContent).toContain("이미지 12");
+    expect(datasetRow?.textContent).toContain("라벨 11");
+    expect(datasetRow?.textContent).toContain("클래스 4");
+    expect(datasetRow?.textContent).toContain("scratch");
+    expect(datasetRow?.textContent).toContain("dent");
+    expect(datasetRow?.textContent).toContain("void");
+    expect(datasetRow?.textContent).toContain("stain");
+    expect(datasetRow?.textContent).not.toContain("+1");
+    expect(datasetRow?.textContent).not.toContain("경고 1건");
+    expect(datasetRow?.textContent).not.toContain("유효성 검사 성공");
+    expect(container.textContent).not.toContain("요약 지표");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("toggles split controls from each dataset row", async () => {
+    const dataset = {
+      class_names: ["scratch"],
+      created_at: "2026-07-02T00:00:00Z",
+      format: "yolo",
+      id: "dataset-1",
+      image_count: 10,
+      label_count: 10,
+      name: "dataset",
+      project_id: "project-1",
+      source_path: "/data/project-1",
+      validation_status: "valid",
+      validation_summary: { errors: [], warnings: [] },
+    };
+    const split = {
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      dataset_yaml_path: "/tmp/data.yaml",
+      id: "split-1",
+      name: "기본 split",
+      seed: 42,
+      split_path: "/tmp/split",
+      train_count: 8,
+      train_ratio: 0.8,
+      test_count: 0,
+      test_ratio: 0,
+      val_count: 2,
+      val_ratio: 0.2,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/projects/project-1")) {
+          return new Response(
+            JSON.stringify({
+              created_at: "2026-07-01T00:00:00Z",
+              description: "",
+              id: "project-1",
+              name: "검수 라인 A",
+              task_type: "detection",
+              updated_at: "2026-07-02T00:00:00Z",
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/datasets")) {
+          return new Response(JSON.stringify([dataset]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets/dataset-1")) {
+          return new Response(JSON.stringify(dataset), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets/dataset-1/splits")) {
+          return new Response(JSON.stringify([split]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const onTabChange = vi.fn();
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="datasets" onTabChange={onTabChange} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Split 목록 열기 · 1개");
+    });
+
+    const datasetRow = container.querySelector<HTMLElement>(".dataset-row");
+    expect(datasetRow?.textContent).not.toContain("기본 split");
+    expect(datasetRow?.textContent).toContain("Split 목록 열기 · 1개");
+    const datasetActions = datasetRow?.querySelector<HTMLElement>(".dataset-row__actions");
+    expect(datasetActions).not.toBeNull();
+    expect(datasetActions!.textContent).toContain("Split 목록 열기 · 1개");
+    expect(datasetActions!.querySelector("[aria-label='dataset 데이터셋 작업']")).not.toBeNull();
+    const actionButtons = Array.from(datasetActions!.querySelectorAll("button"));
+    expect(actionButtons[0]?.getAttribute("aria-label")).toBe("dataset 데이터셋 작업");
+    expect(actionButtons[actionButtons.length - 1]?.textContent).toContain("Split 목록 열기 · 1개");
+    expect(container.querySelector(".dataset-row-detail")).toBeNull();
+    expect(container.querySelectorAll(".split-form")).toHaveLength(0);
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+
+    const splitDetail = container.querySelector<HTMLElement>(".dataset-row-detail");
+    expect(splitDetail?.closest(".dataset-list")).not.toBeNull();
+    expect(datasetRow?.textContent).toContain("Split 목록 접기 · 1개");
+    expect(splitDetail?.textContent).toContain("Split 생성");
+    expect(splitDetail?.textContent).toContain("기본 split");
+    expect(splitDetail?.textContent).toContain("8 / 2 / 0");
+    expect(splitDetail?.textContent).toContain("이 Split으로 학습");
+    expect(splitDetail?.querySelector("[aria-label='기본 split split 작업']")).not.toBeNull();
+    expect(container.querySelectorAll(".split-form")).toHaveLength(0);
+
+    act(() => {
+      Array.from(splitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("이 Split으로 학습"))
+        ?.click();
+    });
+
+    expect(onTabChange).toHaveBeenCalledWith("training");
+
+    act(() => {
+      Array.from(splitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .find((button) => button.textContent?.includes("Split 생성"))
+        ?.click();
+    });
+
+    expect(container.querySelector("[role='dialog']")?.textContent).toContain("Split 생성");
+    expect(container.querySelectorAll(".split-form")).toHaveLength(1);
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='Split 생성 닫기']")?.click();
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+
+    expect(container.querySelector(".dataset-row-detail")).toBeNull();
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("renames and deletes splits from the split row action menu", async () => {
+    const dataset = {
+      class_names: ["scratch"],
+      created_at: "2026-07-02T00:00:00Z",
+      format: "yolo",
+      id: "dataset-1",
+      image_count: 10,
+      label_count: 10,
+      name: "dataset",
+      project_id: "project-1",
+      source_path: "/data/project-1",
+      validation_status: "valid",
+      validation_summary: { errors: [], warnings: [] },
+    };
+    const split = {
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      dataset_yaml_path: "/tmp/data.yaml",
+      id: "split-1",
+      name: "기본 split",
+      seed: 42,
+      split_path: "/tmp/split",
+      train_count: 8,
+      train_ratio: 0.8,
+      test_count: 0,
+      test_ratio: 0,
+      val_count: 2,
+      val_ratio: 0.2,
+    };
+    const renamedSplit = { ...split, name: "수정 split" };
+    let currentSplits = [split];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/projects/project-1")) {
+        return new Response(
+          JSON.stringify({
+            created_at: "2026-07-01T00:00:00Z",
+            description: "",
+            id: "project-1",
+            name: "검수 라인 A",
+            task_type: "detection",
+            updated_at: "2026-07-02T00:00:00Z",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      if (url.endsWith("/api/projects/project-1/datasets")) {
+        return new Response(JSON.stringify([dataset]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-1")) {
+        return new Response(JSON.stringify(dataset), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (
+        url.endsWith("/api/projects/project-1/datasets/dataset-1/splits/split-1") &&
+        init?.method === "PATCH"
+      ) {
+        expect(JSON.parse(String(init.body))).toEqual({ name: "수정 split" });
+        currentSplits = [renamedSplit];
+        return new Response(JSON.stringify(renamedSplit), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (
+        url.endsWith("/api/projects/project-1/datasets/dataset-1/splits/split-1") &&
+        init?.method === "DELETE"
+      ) {
+        currentSplits = [];
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-1/splits")) {
+        return new Response(JSON.stringify(currentSplits), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="datasets" onTabChange={vi.fn()} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Split 목록 열기 · 1개");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("기본 split");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='기본 split split 작업']")?.click();
+    });
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("이름 변경"))
+        ?.click();
+    });
+    const editDialog = container.querySelector<HTMLElement>("[role='dialog']");
+    const editName = editDialog?.querySelector<HTMLInputElement>("input");
+    const editForm = editDialog?.querySelector("form");
+    act(() => {
+      setInputValue(editName!, "수정 split");
+    });
+    await act(async () => {
+      if (editForm) Simulate.submit(editForm);
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("수정 split");
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith("/api/projects/project-1/datasets/dataset-1/splits/split-1") &&
+            init?.method === "PATCH",
+        ),
+      ).toBe(true);
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='수정 split split 작업']")?.click();
+    });
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("삭제"))
+        ?.click();
+    });
+    expect(container.querySelector("[role='dialog']")?.textContent).toContain("수정 split");
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".danger-button"))
+        .find((button) => button.textContent?.includes("삭제"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith("/api/projects/project-1/datasets/dataset-1/splits/split-1") &&
+            init?.method === "DELETE",
+        ),
+      ).toBe(true);
+      expect(container.textContent).not.toContain("수정 split");
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("renames and deletes datasets from the row action menu", async () => {
+    const dataset = {
+      class_names: ["scratch"],
+      created_at: "2026-07-02T00:00:00Z",
+      format: "yolo",
+      id: "dataset-1",
+      image_count: 10,
+      label_count: 10,
+      name: "기존 데이터셋",
+      project_id: "project-1",
+      source_path: "/data/project-1",
+      validation_status: "valid",
+      validation_summary: { errors: [], warnings: [] },
+    };
+    const renamedDataset = {
+      ...dataset,
+      name: "수정된 데이터셋",
+    };
+    let currentDatasets = [dataset];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/projects/project-1")) {
+        return new Response(
+          JSON.stringify({
+            created_at: "2026-07-01T00:00:00Z",
+            description: "",
+            id: "project-1",
+            name: "검수 라인 A",
+            task_type: "detection",
+            updated_at: "2026-07-02T00:00:00Z",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-1") && init?.method === "PATCH") {
+        expect(JSON.parse(String(init.body))).toEqual({ name: "수정된 데이터셋" });
+        currentDatasets = [renamedDataset];
+        return new Response(JSON.stringify(renamedDataset), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-1") && init?.method === "DELETE") {
+        currentDatasets = [];
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets")) {
+        return new Response(JSON.stringify(currentDatasets), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-1")) {
+        return new Response(JSON.stringify(currentDatasets[0] ?? renamedDataset), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-1/splits")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="datasets" onTabChange={vi.fn()} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("기존 데이터셋");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='기존 데이터셋 데이터셋 작업']")?.click();
+    });
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("이름 변경"))
+        ?.click();
+    });
+
+    const editDialog = container.querySelector<HTMLElement>("[role='dialog']");
+    const editName = editDialog?.querySelector<HTMLInputElement>("input");
+    const editForm = editDialog?.querySelector("form");
+    act(() => {
+      setInputValue(editName!, "수정된 데이터셋");
+    });
+    await act(async () => {
+      if (editForm) Simulate.submit(editForm);
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("수정된 데이터셋");
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith("/api/projects/project-1/datasets/dataset-1") &&
+            init?.method === "PATCH",
+        ),
+      ).toBe(true);
+      expect(container.querySelector("[role='dialog']")).toBeNull();
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='수정된 데이터셋 데이터셋 작업']")?.click();
+    });
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("삭제"))
+        ?.click();
+    });
+
+    expect(container.querySelector("[role='dialog']")?.textContent).toContain(
+      "이 데이터셋의 split, 학습 실행, 추론 결과",
+    );
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".danger-button"))
+        .find((button) => button.textContent?.includes("삭제"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith("/api/projects/project-1/datasets/dataset-1") &&
+            init?.method === "DELETE",
+        ),
+      ).toBe(true);
+      expect(container.querySelector(".dataset-row")).toBeNull();
+    });
+
+    act(() => root.unmount());
+    container.remove();
   });
 
   it("prevents split creation when ratios do not sum to one", async () => {
@@ -634,140 +1773,37 @@ describe("ProjectDetailPage", () => {
       expect(container.textContent).toContain("dataset");
     });
 
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("Split 생성"))
+        ?.click();
+    });
+
     const ratioInputs = Array.from(container.querySelectorAll<HTMLInputElement>(".split-form input"));
+    const nameInput = ratioInputs[0];
     const trainInput = ratioInputs[1];
+    const valInput = ratioInputs[2];
+    const testInput = ratioInputs[3];
+    const seedInput = ratioInputs[4];
     const splitButton = container.querySelector<HTMLButtonElement>(".split-form .primary-button");
 
+    expect(container.querySelector(".split-form")?.textContent).toContain("Test");
+    expect(testInput?.value).toBe("");
+    expect(splitButton?.disabled).toBe(true);
+
     act(() => {
-      setInputValue(trainInput, "0.9");
+      setInputValue(nameInput as HTMLInputElement, "검증 split");
+      setInputValue(trainInput as HTMLInputElement, "0.8");
+      setInputValue(valInput as HTMLInputElement, "0.2");
+      setInputValue(testInput as HTMLInputElement, "0.1");
+      setInputValue(seedInput as HTMLInputElement, "42");
     });
 
     expect(container.textContent).toContain("합은 1.0");
     expect(splitButton?.disabled).toBe(true);
-
-    act(() => root.unmount());
-    container.remove();
-  });
-
-  it("moves focus when using arrow keys on tabs", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.endsWith("/api/projects/project-1")) {
-          return new Response(
-            JSON.stringify({
-              created_at: "2026-07-01T00:00:00Z",
-              description: "",
-              id: "project-1",
-              name: "검수 라인 A",
-              task_type: "detection",
-              updated_at: "2026-07-02T00:00:00Z",
-            }),
-            { headers: { "Content-Type": "application/json" }, status: 200 },
-          );
-        }
-        if (url.endsWith("/api/projects/project-1/datasets")) {
-          return new Response(JSON.stringify([]), {
-            headers: { "Content-Type": "application/json" },
-            status: 200,
-          });
-        }
-        return new Response("not found", { status: 404 });
-      }),
-    );
-    const onTabChange = vi.fn();
-    const { container, root } = renderWithQuery(
-      <ProjectDetailPage activeTab="datasets" onTabChange={onTabChange} projectId="project-1" />,
-    );
-
-    const datasetsTab = container.querySelector<HTMLButtonElement>("#datasets-tab");
-    const trainingTab = container.querySelector<HTMLButtonElement>("#training-tab");
-    const inferenceTab = container.querySelector<HTMLButtonElement>("#inference-tab");
-
-    act(() => {
-      datasetsTab?.focus();
-      datasetsTab?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
-    });
-
-    await act(async () => {
-      await new Promise((resolve) => window.requestAnimationFrame(resolve));
-    });
-
-    expect(onTabChange).toHaveBeenCalledWith("training");
-    expect(document.activeElement).toBe(trainingTab);
-
-    act(() => {
-      datasetsTab?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "End" }));
-    });
-
-    await act(async () => {
-      await new Promise((resolve) => window.requestAnimationFrame(resolve));
-    });
-
-    expect(onTabChange).toHaveBeenCalledWith("inference");
-    expect(document.activeElement).toBe(inferenceTab);
-
-    act(() => {
-      inferenceTab?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Home" }));
-    });
-
-    await act(async () => {
-      await new Promise((resolve) => window.requestAnimationFrame(resolve));
-    });
-
-    expect(onTabChange).toHaveBeenCalledWith("datasets");
-    expect(document.activeElement).toBe(datasetsTab);
-
-    act(() => root.unmount());
-    container.remove();
-  });
-
-  it("moves tabs from the focused tab rather than the selected tab", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.endsWith("/api/projects/project-1")) {
-          return new Response(
-            JSON.stringify({
-              created_at: "2026-07-01T00:00:00Z",
-              description: "",
-              id: "project-1",
-              name: "검수 라인 A",
-              task_type: "detection",
-              updated_at: "2026-07-02T00:00:00Z",
-            }),
-            { headers: { "Content-Type": "application/json" }, status: 200 },
-          );
-        }
-        if (url.endsWith("/api/projects/project-1/datasets")) {
-          return new Response(JSON.stringify([]), {
-            headers: { "Content-Type": "application/json" },
-            status: 200,
-          });
-        }
-        return new Response("not found", { status: 404 });
-      }),
-    );
-    const onTabChange = vi.fn();
-    const { container, root } = renderWithQuery(
-      <ProjectDetailPage activeTab="datasets" onTabChange={onTabChange} projectId="project-1" />,
-    );
-
-    const inferenceTab = container.querySelector<HTMLButtonElement>("#inference-tab");
-
-    act(() => {
-      inferenceTab?.focus();
-      inferenceTab?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
-    });
-
-    await act(async () => {
-      await new Promise((resolve) => window.requestAnimationFrame(resolve));
-    });
-
-    expect(onTabChange).toHaveBeenCalledWith("datasets");
-    expect(document.activeElement).toBe(container.querySelector<HTMLButtonElement>("#datasets-tab"));
 
     act(() => root.unmount());
     container.remove();
@@ -871,7 +1907,7 @@ describe("ProjectDetailPage", () => {
     expect(dialog?.textContent).toContain("데이터 업로드");
 
     const fields = Array.from(dialog?.querySelectorAll<HTMLInputElement>("input") ?? []);
-    const datasetNameInput = fields.find((input) => input.placeholder === "불량 샘플 7월");
+    const datasetNameInput = fields.find((input) => input.placeholder === "데이터셋 이름을 입력하세요");
     const imagesInput = dialog?.querySelector<HTMLInputElement>("[aria-label='이미지 폴더 선택']");
     const labelsInput = dialog?.querySelector<HTMLInputElement>("[aria-label='라벨 폴더 선택']");
     const dataYamlInput = dialog?.querySelector<HTMLInputElement>("[aria-label='data.yaml']");
@@ -929,7 +1965,7 @@ describe("ProjectDetailPage", () => {
     container.remove();
   });
 
-  it("shows a real training form and blocks creation when splits are missing", async () => {
+  it("requires choosing a split before opening the training modal", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -995,14 +2031,414 @@ describe("ProjectDetailPage", () => {
 
     await waitForAssertion(() => {
       expect(container.textContent).toContain("새 학습 실행");
-      expect(container.textContent).toContain("Split 없음");
+      expect(container.querySelector("[role='dialog']")).toBeNull();
+      expect(container.textContent).toContain("Split 선택");
       expect(container.textContent).toContain("학습에 사용할 Split을 먼저 생성하세요.");
     });
 
-    const submitButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.includes("학습 시작"),
+    const openDrawerButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("새 학습 실행"),
     );
-    expect(submitButton?.disabled).toBe(true);
+    expect(openDrawerButton?.disabled).toBe(true);
+    act(() => {
+      openDrawerButton?.click();
+    });
+
+    expect(container.querySelector("[role='dialog']")).toBeNull();
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("shows the live training terminal for the selected split", async () => {
+    const dataset = {
+      class_names: ["scratch"],
+      created_at: "2026-07-02T00:00:00Z",
+      format: "yolo",
+      id: "dataset-1",
+      image_count: 20,
+      label_count: 20,
+      name: "라인 A 데이터셋",
+      project_id: "project-1",
+      source_path: "/data/project-1",
+      validation_status: "valid",
+      validation_summary: { errors: [], warnings: [] },
+    };
+    const splitA = {
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      dataset_yaml_path: "/tmp/data-a.yaml",
+      id: "split-a",
+      name: "Split A",
+      seed: 42,
+      split_path: "/tmp/split-a",
+      train_count: 8,
+      train_ratio: 0.8,
+      test_count: 0,
+      test_ratio: 0,
+      val_count: 2,
+      val_ratio: 0.2,
+    };
+    const splitB = {
+      ...splitA,
+      dataset_yaml_path: "/tmp/data-b.yaml",
+      id: "split-b",
+      name: "Split B",
+      split_path: "/tmp/split-b",
+    };
+    const runForSplitA = {
+      artifact_path: null,
+      config: {},
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      finished_at: null,
+      id: "run-a",
+      log_path: "/tmp/run-a/logs/stdout.log",
+      metrics_summary: {},
+      model_name: "yolo11n",
+      name: "Split A 학습",
+      project_id: "project-1",
+      split_id: "split-a",
+      started_at: "2026-07-02T00:00:00Z",
+      status: "running",
+      trainer: "ultralytics",
+      updated_at: "2026-07-02T00:01:00Z",
+    };
+    const runForSplitB = {
+      ...runForSplitA,
+      created_at: "2026-07-02T00:03:00Z",
+      id: "run-b",
+      log_path: "/tmp/run-b/logs/stdout.log",
+      name: "Split B 학습",
+      split_id: "split-b",
+      updated_at: "2026-07-02T00:04:00Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime/check")) {
+        return new Response(
+          JSON.stringify({
+            devices: [{ available: true, details: {}, id: "cpu", kind: "cpu", label: "CPU" }],
+            install_options: [],
+            install_required: false,
+            packages: {},
+            python: { executable: "/usr/bin/python", version: "3.11.0" },
+            ready: true,
+            yolo_cli: { installed: true, path: "/tmp/yolo" },
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      if (url.endsWith("/api/projects/project-1")) {
+        return new Response(
+          JSON.stringify({
+            created_at: "2026-07-01T00:00:00Z",
+            description: "",
+            id: "project-1",
+            name: "검수 라인 A",
+            task_type: "detection",
+            updated_at: "2026-07-02T00:00:00Z",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      if (url.endsWith("/api/projects/project-1/datasets")) {
+        return new Response(JSON.stringify([dataset]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-1")) {
+        return new Response(JSON.stringify(dataset), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-1/splits")) {
+        return new Response(JSON.stringify([splitA, splitB]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/training-runs")) {
+        return new Response(JSON.stringify([runForSplitB, runForSplitA]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/training-runs/run-a/logs?tail=200")) {
+        return new Response(JSON.stringify({ lines: ["split-a live log"], offset: 16 }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/training-runs/run-b/logs?tail=200")) {
+        return new Response(JSON.stringify({ lines: ["split-b live log"], offset: 16 }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="training" onTabChange={vi.fn()} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Split A 학습");
+      expect(container.textContent).toContain("split-a live log");
+      expect(container.textContent).not.toContain("Split B 학습");
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          String(url).endsWith("/api/projects/project-1/training-runs/run-a/logs?tail=200"),
+        ),
+      ).toBe(true);
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>(".training-split-option"))
+        .find((button) => button.textContent?.includes("Split B"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("Split B 학습");
+      expect(container.textContent).toContain("split-b live log");
+      expect(container.textContent).not.toContain("split-a live log");
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          String(url).endsWith("/api/projects/project-1/training-runs/run-b/logs?tail=200"),
+        ),
+      ).toBe(true);
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("shows project training results and downloadable artifacts in training management", async () => {
+    const trainingRuns = [
+      {
+        artifact_path: "/tmp/train/run-a",
+        config: {
+          amp: true,
+          batch: 16,
+          device: "cpu",
+          epochs: 50,
+          imgsz: 640,
+          learning_rate: 0.01,
+          optimizer: "AdamW",
+          seed: 42,
+        },
+        created_at: "2026-07-02T00:00:00Z",
+        dataset_id: "dataset-1",
+        finished_at: "2026-07-02T00:10:00Z",
+        id: "run-a",
+        log_path: null,
+        metrics_summary: {
+          best_mAP50: 0.94,
+          best_precision: 0.91,
+          best_recall: 0.88,
+          last_epoch: 48,
+        },
+        model_name: "yolo11n",
+        name: "B 실험",
+        project_id: "project-1",
+        split_id: "split-1",
+        started_at: "2026-07-02T00:00:00Z",
+        status: "completed",
+        trainer: "ultralytics",
+        updated_at: "2026-07-02T00:10:00Z",
+      },
+      {
+        artifact_path: "/tmp/train/run-b",
+        config: {},
+        created_at: "2026-07-01T00:00:00Z",
+        dataset_id: "dataset-1",
+        finished_at: "2026-07-01T00:10:00Z",
+        id: "run-b",
+        log_path: null,
+        metrics_summary: {
+          best_mAP50: 0.98,
+          best_precision: 0.89,
+          best_recall: 0.93,
+        },
+        model_name: "yolo11s",
+        name: "A 실험",
+        project_id: "project-1",
+        split_id: "split-1",
+        started_at: "2026-07-01T00:00:00Z",
+        status: "completed",
+        trainer: "ultralytics",
+        updated_at: "2026-07-01T00:10:00Z",
+      },
+      {
+        artifact_path: "/tmp/train/run-c",
+        config: {},
+        created_at: "2026-07-03T00:00:00Z",
+        dataset_id: "dataset-1",
+        finished_at: "2026-07-03T00:10:00Z",
+        id: "run-c",
+        log_path: null,
+        metrics_summary: {
+          best_mAP50: 0.72,
+          best_precision: 0.96,
+          best_recall: 0.75,
+        },
+        model_name: "yolo11n",
+        name: "C 실험",
+        project_id: "project-1",
+        split_id: "split-1",
+        started_at: "2026-07-03T00:00:00Z",
+        status: "failed",
+        trainer: "ultralytics",
+        updated_at: "2026-07-03T00:10:00Z",
+      },
+    ];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/projects")) {
+          return new Response(
+            JSON.stringify([
+              {
+                created_at: "2026-07-01T00:00:00Z",
+                description: "",
+                id: "project-1",
+                name: "라인 A",
+                root_path: "/tmp/project-1",
+                updated_at: "2026-07-01T00:00:00Z",
+              },
+            ]),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1")) {
+          return new Response(
+            JSON.stringify({
+              created_at: "2026-07-01T00:00:00Z",
+              description: "",
+              id: "project-1",
+              name: "라인 A",
+              root_path: "/tmp/project-1",
+              updated_at: "2026-07-01T00:00:00Z",
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs")) {
+          return new Response(JSON.stringify(trainingRuns), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs/run-a")) {
+          const trainingRun = trainingRuns.find((run) => run.id === "run-a");
+          return new Response(JSON.stringify(trainingRun), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.includes("/metrics")) {
+          return new Response(
+            JSON.stringify({
+              rows: [{ epoch: 48, "metrics/mAP50(B)": 0.94 }],
+              summary: { best_mAP50: 0.94 },
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.includes("/downloads")) {
+          return new Response(
+            JSON.stringify([
+              {
+                filename: "results.csv",
+                kind: "metrics",
+                label: "results.csv",
+                url: "/api/projects/project-1/training-runs/run-a/results.csv",
+              },
+              {
+                filename: "best.pt",
+                kind: "model_best",
+                label: "best.pt",
+                url: "/api/projects/project-1/training-runs/run-a/artifacts/artifact-best/download",
+              },
+              {
+                filename: "last.pt",
+                kind: "model_last",
+                label: "last.pt",
+                url: "/api/projects/project-1/training-runs/run-a/artifacts/artifact-last/download",
+              },
+            ]),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.includes("/logs?tail=200")) {
+          return new Response(JSON.stringify({ lines: [], offset: 0 }), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const onOpenRun = vi.fn();
+    const { container, root } = renderWithQuery(
+      <TrainingManagementPage onOpenRun={onOpenRun} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("학습 결과 목록");
+      expect(container.textContent).toContain("라인 A");
+      expect(container.textContent).toContain("B 실험");
+      expect(container.textContent).toContain("A 실험");
+      expect(container.textContent).toContain("C 실험");
+      expect(container.textContent).toContain("정렬");
+      expect(container.textContent).toContain("mAP50 높은순");
+      expect(container.querySelector(".training-result-card")).not.toBeNull();
+      expect(
+        container.querySelector<HTMLImageElement>("img[data-training-thumbnail='run-a']")?.src,
+      ).toContain("/api/projects/project-1/training-runs/run-a/thumbnail");
+      expect(container.textContent).toContain("mAP50");
+      expect(container.textContent).toContain("0.9400");
+      expect(container.textContent).toContain("Precision");
+      expect(container.textContent).toContain("0.9100");
+      expect(container.textContent).not.toContain("AdamW");
+      expect(container.textContent).not.toContain("results.csv");
+      expect(container.textContent).not.toContain("best.pt");
+      expect(container.textContent).not.toContain("last.pt");
+    });
+    const cardTitles = () =>
+      Array.from(container.querySelectorAll(".training-result-card__title strong")).map(
+        (element) => element.textContent,
+      );
+    expect(cardTitles()).toEqual(["C 실험", "B 실험", "A 실험"]);
+
+    const sortSelect = container.querySelector<HTMLSelectElement>("select[aria-label='정렬']");
+    expect(sortSelect).not.toBeNull();
+    act(() => {
+      (sortSelect as HTMLSelectElement).value = "map50";
+      Simulate.change(sortSelect as HTMLSelectElement);
+    });
+    expect(cardTitles()).toEqual(["A 실험", "B 실험", "C 실험"]);
+
+    act(() => {
+      (sortSelect as HTMLSelectElement).value = "name";
+      Simulate.change(sortSelect as HTMLSelectElement);
+    });
+    expect(cardTitles()).toEqual(["A 실험", "B 실험", "C 실험"]);
+
+    const card = container.querySelector<HTMLButtonElement>(".training-result-card");
+    expect(card).not.toBeNull();
+    act(() => {
+      Simulate.click(card as HTMLButtonElement);
+    });
+    expect(onOpenRun).toHaveBeenCalledWith("project-1", "run-b");
 
     act(() => root.unmount());
     container.remove();
@@ -1034,6 +2470,8 @@ describe("ProjectDetailPage", () => {
         split_path: "/tmp/split",
         train_count: 8,
         train_ratio: 0.8,
+        test_count: 0,
+        test_ratio: 0,
         val_count: 2,
         val_ratio: 0.2,
       };
@@ -1101,8 +2539,23 @@ describe("ProjectDetailPage", () => {
         expect(body.config.mixup).toBe(0.1);
         return new Response(
           JSON.stringify({
-            blocking_issues: ["Ultralytics가 설치되어 있지 않습니다."],
-            can_start: false,
+            blocking_issues: [],
+            can_start: true,
+            command_preview: {
+              argv: [
+                "/tmp/yolo",
+                "detect",
+                "train",
+                "model=yolo11n.pt",
+                "data=/tmp/data.yaml",
+                "epochs=50",
+                "batch=16",
+                "name=<new-run-id>",
+              ],
+              kind: "yolo_cli",
+              shell:
+                "/tmp/yolo detect train model=yolo11n.pt data=/tmp/data.yaml epochs=50 batch=16 'name=<new-run-id>'",
+            },
             devices: runtime.devices,
             recommendations: [],
             runtime,
@@ -1122,6 +2575,29 @@ describe("ProjectDetailPage", () => {
           { headers: { "Content-Type": "application/json" }, status: 200 },
         );
       }
+      if (url.endsWith("/api/projects/project-1/training-runs") && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            artifact_path: null,
+            config: {},
+            created_at: "2026-07-02T00:00:00Z",
+            dataset_id: "dataset-1",
+            finished_at: null,
+            id: "run-created",
+            log_path: null,
+            metrics_summary: {},
+            model_name: "yolo11n",
+            name: "preflight run",
+            project_id: "project-1",
+            split_id: "split-1",
+            started_at: null,
+            status: "queued",
+            trainer: "ultralytics",
+            updated_at: "2026-07-02T00:00:00Z",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 201 },
+        );
+      }
       if (url.endsWith("/api/projects/project-1/training-runs")) {
         return new Response(JSON.stringify([]), {
           headers: { "Content-Type": "application/json" },
@@ -1137,19 +2613,37 @@ describe("ProjectDetailPage", () => {
     );
 
     await waitForAssertion(() => {
-      expect(container.textContent).toContain("현재 학습 가능");
-      expect(container.textContent).toContain("CUDA GPU 0");
+      expect(container.textContent).toContain("라인 A 데이터셋 / 기본 split");
+    });
+
+    let openDrawerButton: HTMLButtonElement | undefined;
+    await waitForAssertion(() => {
+      openDrawerButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.includes("새 학습 실행"),
+      );
+      expect(openDrawerButton?.disabled).toBe(false);
+    });
+    act(() => {
+      openDrawerButton?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.querySelector("[role='dialog']")).not.toBeNull();
+      expect(container.textContent).toContain("Split 선택");
+      expect(container.textContent).toContain("라인 A 데이터셋 / 기본 split");
+      expect(container.querySelector<HTMLSelectElement>("[aria-label='Split 선택']")).toBeNull();
     });
 
     const nameInput = Array.from(container.querySelectorAll<HTMLInputElement>("input")).find(
-      (input) => input.placeholder === "라인 A 기준 모델",
+      (input) => input.placeholder === "학습 실행 이름을 입력하세요",
     );
     const hyperparameterPresetSelect = container.querySelector<HTMLSelectElement>(
-      "[aria-label='하이퍼파라미터 preset']",
+      "[aria-label='Hyperparameter preset']",
     );
     const trainingForm = nameInput?.closest("form");
     const formText = trainingForm?.textContent ?? "";
-    expect(formText.indexOf("device")).toBeLessThan(formText.indexOf("학습 환경"));
+    expect(formText).toContain("device");
+    expect(formText).not.toContain("학습 환경");
 
     act(() => {
       setSelectValue(hyperparameterPresetSelect!, "accuracy");
@@ -1157,6 +2651,10 @@ describe("ProjectDetailPage", () => {
     });
     await act(async () => {
       if (trainingForm) Simulate.submit(trainingForm);
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("CUDA GPU 0");
     });
 
     await waitForAssertion(() => {
@@ -1168,13 +2666,27 @@ describe("ProjectDetailPage", () => {
           );
         }),
       ).toBe(true);
-      expect(container.textContent).toContain("학습 전 확인 필요");
-      expect(container.textContent).toContain("Ultralytics가 설치되어 있지 않습니다.");
+      expect(container.textContent).toContain("실행 명령");
+      expect(container.textContent).toContain("yolo detect train");
+      expect(container.textContent).toContain("model=yolo11n.pt");
+      expect(container.textContent).toContain("name=<new-run-id>");
       expect(
         fetchMock.mock.calls.some(([url, init]) => {
           return String(url).endsWith("/api/projects/project-1/training-runs") && init?.method === "POST";
         }),
       ).toBe(false);
+    });
+
+    await act(async () => {
+      if (trainingForm) Simulate.submit(trainingForm);
+    });
+
+    await waitForAssertion(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) => {
+          return String(url).endsWith("/api/projects/project-1/training-runs") && init?.method === "POST";
+        }),
+      ).toBe(true);
     });
 
     act(() => root.unmount());
@@ -1288,13 +2800,38 @@ describe("ProjectDetailPage", () => {
     );
 
     await waitForAssertion(() => {
-      expect(container.textContent).toContain("추론 실행");
+      expect(container.textContent).toContain("추론 실행 목록");
+    });
+
+    expect(
+      Array.from(container.querySelectorAll<HTMLInputElement>("input")).find(
+        (input) => input.placeholder === "추론 실행 이름을 입력하세요",
+      ),
+    ).toBeUndefined();
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("새 추론 실행"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
       expect(container.textContent).toContain("완료 학습 / best");
       expect(container.textContent).toContain("best.pt");
+      expect(container.textContent).not.toContain("이 값보다 낮은 신뢰도의 객체는 숨깁니다.");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='conf 도움말']")?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("이 값보다 낮은 신뢰도의 객체는 숨깁니다.");
+      expect(container.textContent).not.toContain("conf는");
     });
 
     const nameInput = Array.from(container.querySelectorAll<HTMLInputElement>("input")).find(
-      (input) => input.placeholder === "검수 이미지 추론",
+      (input) => input.placeholder === "추론 실행 이름을 입력하세요",
     );
     const inputFiles = container.querySelector<HTMLInputElement>("[aria-label='추론 이미지 폴더 선택']");
     const typeSelect = container.querySelector<HTMLSelectElement>("[aria-label='추론 입력 유형']");
@@ -1314,11 +2851,189 @@ describe("ProjectDetailPage", () => {
 
     await waitForAssertion(() => {
       expect(container.textContent).toContain("inference-1");
+      expect(container.querySelector("[role='dialog']")).toBeNull();
       expect(
         fetchMock.mock.calls.some(
           ([url, init]) =>
             String(url).endsWith("/api/projects/project-1/inference-runs/upload") &&
             init?.method === "POST",
+        ),
+      ).toBe(true);
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("shows inference runs as thumbnails with toggle details and delete actions", async () => {
+    const completedTrainingRun = {
+      artifact_path: "/tmp/train/run-1",
+      config: {},
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      finished_at: "2026-07-02T00:10:00Z",
+      id: "run-1",
+      log_path: "/tmp/train/run-1/logs/stdout.log",
+      metrics_summary: {},
+      model_name: "yolov8n",
+      name: "완료 학습",
+      project_id: "project-1",
+      split_id: "split-1",
+      started_at: "2026-07-02T00:00:00Z",
+      status: "completed",
+      trainer: "ultralytics",
+      updated_at: "2026-07-02T00:10:00Z",
+    };
+    const artifact = {
+      created_at: "2026-07-02T00:10:00Z",
+      id: "artifact-best",
+      kind: "best",
+      metrics_snapshot: {},
+      path: "/tmp/train/run-1/weights/best.pt",
+      training_run_id: "run-1",
+      updated_at: "2026-07-02T00:10:00Z",
+    };
+    const folderRun = {
+      config: { conf: 0.25, imgsz: 640 },
+      created_at: "2026-07-02T00:11:00Z",
+      finished_at: "2026-07-02T00:12:00Z",
+      id: "folder-run",
+      input_path: "/tmp/images/batch",
+      input_type: "folder",
+      model_artifact_id: artifact.id,
+      name: "폴더 추론",
+      output_path: "/tmp/outputs/folder-run",
+      prediction_count: 1,
+      project_id: "project-1",
+      started_at: "2026-07-02T00:11:00Z",
+      status: "completed",
+      updated_at: "2026-07-02T00:12:00Z",
+    };
+    const imageRun = {
+      ...folderRun,
+      id: "image-run",
+      input_path: "/tmp/images/single.jpg",
+      input_type: "image",
+      name: "단일 추론",
+      prediction_count: 0,
+    };
+    const prediction = {
+      class_names: ["scratch"],
+      created_at: "2026-07-02T00:12:00Z",
+      id: "prediction-1",
+      image_path: "/tmp/images/batch/part.jpg",
+      inference_run_id: folderRun.id,
+      max_confidence: 0.91,
+      output_image_path: "/tmp/outputs/folder-run/visionops_rendered/part.jpg",
+      prediction_json: {
+        detections: [
+          {
+            bbox: { height: 0.3, width: 0.2, x_center: 0.5, y_center: 0.5 },
+            class_id: 0,
+            class_name: "scratch",
+            confidence: 0.91,
+          },
+        ],
+      },
+      updated_at: "2026-07-02T00:12:00Z",
+    };
+    let inferenceRuns = [folderRun, imageRun];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/projects/project-1")) {
+        return new Response(
+          JSON.stringify({
+            created_at: "2026-07-01T00:00:00Z",
+            description: "",
+            id: "project-1",
+            name: "검수 라인 A",
+            task_type: "detection",
+            updated_at: "2026-07-02T00:00:00Z",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      if (url.endsWith("/api/projects/project-1/datasets")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/training-runs")) {
+        return new Response(JSON.stringify([completedTrainingRun]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/training-runs/run-1/artifacts")) {
+        return new Response(JSON.stringify([artifact]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/inference-runs/folder-run/predictions")) {
+        return new Response(JSON.stringify([prediction]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/inference-runs/image-run/predictions")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (
+        url.endsWith("/api/projects/project-1/inference-runs/image-run") &&
+        init?.method === "DELETE"
+      ) {
+        inferenceRuns = inferenceRuns.filter((run) => run.id !== "image-run");
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/api/projects/project-1/inference-runs")) {
+        return new Response(JSON.stringify(inferenceRuns), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="inference" onTabChange={vi.fn()} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("폴더 추론");
+      expect(container.textContent).toContain("폴더");
+      expect(container.textContent).toContain("batch");
+      expect(container.textContent).toContain("단일 추론");
+      expect(container.textContent).toContain("단일 이미지");
+      expect(container.textContent).toContain("single.jpg");
+      expect(container.querySelector(".inference-run-thumbnail img")).not.toBeNull();
+    });
+
+    expect(container.textContent).not.toContain("scratch");
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("자세히"))
+        ?.click();
+    });
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("scratch");
+    });
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='단일 추론 삭제']")?.click();
+    });
+    await waitForAssertion(() => {
+      expect(container.textContent).not.toContain("단일 추론");
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith("/api/projects/project-1/inference-runs/image-run") &&
+            init?.method === "DELETE",
         ),
       ).toBe(true);
     });
@@ -1447,15 +3162,162 @@ describe("ProjectDetailPage", () => {
     );
 
     await waitForAssertion(() => {
+      expect(container.textContent).toContain("완료 추론");
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("자세히"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
       expect(container.textContent).toContain("추론 결과");
       expect(container.textContent).toContain("part.jpg");
       expect(container.textContent).toContain("scratch");
       expect(container.textContent).toContain("0.91");
       expect(
         container.querySelector<HTMLImageElement>(
-          "img[src$='/api/projects/project-1/inference-runs/inference-1/predictions/prediction-1/image']",
+          "img[src*='/api/projects/project-1/inference-runs/inference-1/predictions/prediction-1/image?v=']",
         ),
       ).not.toBeNull();
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("does not show original input images when rendered prediction images are missing", async () => {
+    const completedTrainingRun = {
+      artifact_path: "/tmp/train/run-1",
+      config: {},
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      finished_at: "2026-07-02T00:10:00Z",
+      id: "run-1",
+      log_path: "/tmp/train/run-1/logs/stdout.log",
+      metrics_summary: {},
+      model_name: "yolov8n",
+      name: "완료 학습",
+      project_id: "project-1",
+      split_id: "split-1",
+      started_at: "2026-07-02T00:00:00Z",
+      status: "completed",
+      trainer: "ultralytics",
+      updated_at: "2026-07-02T00:10:00Z",
+    };
+    const artifact = {
+      created_at: "2026-07-02T00:10:00Z",
+      id: "artifact-best",
+      kind: "best",
+      metrics_snapshot: {},
+      path: "/tmp/train/run-1/weights/best.pt",
+      training_run_id: "run-1",
+      updated_at: "2026-07-02T00:10:00Z",
+    };
+    const inferenceRun = {
+      config: { conf: 0.25, imgsz: 640 },
+      created_at: "2026-07-02T00:11:00Z",
+      finished_at: "2026-07-02T00:12:00Z",
+      id: "inference-1",
+      input_path: "/tmp/images",
+      input_type: "folder",
+      model_artifact_id: artifact.id,
+      name: "완료 추론",
+      output_path: "/tmp/outputs",
+      prediction_count: 1,
+      project_id: "project-1",
+      started_at: "2026-07-02T00:11:00Z",
+      status: "completed",
+      updated_at: "2026-07-02T00:12:00Z",
+    };
+    const prediction = {
+      class_names: ["scratch"],
+      created_at: "2026-07-02T00:12:00Z",
+      id: "prediction-1",
+      image_path: "/tmp/images/part.jpg",
+      inference_run_id: inferenceRun.id,
+      max_confidence: 0,
+      output_image_path: "",
+      prediction_json: {
+        detections: [],
+        output_image_path: "",
+      },
+      updated_at: "2026-07-02T00:12:00Z",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/projects/project-1")) {
+          return new Response(
+            JSON.stringify({
+              created_at: "2026-07-01T00:00:00Z",
+              description: "",
+              id: "project-1",
+              name: "검수 라인 A",
+              task_type: "detection",
+              updated_at: "2026-07-02T00:00:00Z",
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/datasets")) {
+          return new Response(JSON.stringify([]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs")) {
+          return new Response(JSON.stringify([completedTrainingRun]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs/run-1/artifacts")) {
+          return new Response(JSON.stringify([artifact]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/inference-runs")) {
+          return new Response(JSON.stringify([inferenceRun]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/inference-runs/inference-1/predictions")) {
+          return new Response(JSON.stringify([prediction]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="inference" onTabChange={vi.fn()} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("완료 추론");
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("자세히"))
+        ?.click();
+    });
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("결과 이미지 없음");
+      expect(container.textContent).toContain("part.jpg");
+      expect(
+        container.querySelector<HTMLImageElement>(
+          "img[src$='/api/projects/project-1/inference-runs/inference-1/predictions/prediction-1/image']",
+        ),
+      ).toBeNull();
     });
 
     act(() => root.unmount());
@@ -1496,6 +3358,34 @@ describe("ProjectDetailPage", () => {
       status: "failed",
       updated_at: "2026-07-02T00:30:00Z",
     };
+    const dataset = {
+      class_names: ["scratch"],
+      created_at: "2026-07-02T00:00:00Z",
+      format: "yolo",
+      id: "dataset-1",
+      image_count: 10,
+      label_count: 10,
+      name: "라인 A 데이터셋",
+      project_id: "project-1",
+      source_path: "/data/project-1",
+      validation_status: "valid",
+      validation_summary: { errors: [], warnings: [] },
+    };
+    const split = {
+      created_at: "2026-07-02T00:00:00Z",
+      dataset_id: "dataset-1",
+      dataset_yaml_path: "/tmp/data.yaml",
+      id: "split-1",
+      name: "기본 split",
+      seed: 42,
+      split_path: "/tmp/split",
+      train_count: 8,
+      train_ratio: 0.8,
+      test_count: 0,
+      test_ratio: 0,
+      val_count: 2,
+      val_ratio: 0.2,
+    };
 
     vi.stubGlobal(
       "fetch",
@@ -1515,7 +3405,19 @@ describe("ProjectDetailPage", () => {
           );
         }
         if (url.endsWith("/api/projects/project-1/datasets")) {
-          return new Response(JSON.stringify([]), {
+          return new Response(JSON.stringify([dataset]), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets/dataset-1")) {
+          return new Response(JSON.stringify(dataset), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/datasets/dataset-1/splits")) {
+          return new Response(JSON.stringify([split]), {
             headers: { "Content-Type": "application/json" },
             status: 200,
           });
@@ -1565,19 +3467,12 @@ describe("ProjectDetailPage", () => {
     );
 
     await waitForAssertion(() => {
-      expect(container.querySelector(".training-detail__header h2")?.textContent).toBe("완료 학습");
-    });
-
-    const failedFilterButton = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".segment-control button"),
-    ).find((button) => button.textContent === "실패");
-
-    act(() => {
-      failedFilterButton?.click();
-    });
-
-    await waitForAssertion(() => {
-      expect(container.querySelector(".training-detail__header h2")?.textContent).toBe("실패 학습");
+      expect(container.querySelector(".training-terminal-panel h2")?.textContent).toBe(
+        "실시간 학습 터미널",
+      );
+      expect(container.querySelector(".training-terminal-title")?.textContent).toContain("완료 학습");
+      expect(container.textContent).toContain("학습 결과 보기");
+      expect(container.textContent).not.toContain("학습 실행 목록");
     });
 
     act(() => root.unmount());
@@ -1612,6 +3507,9 @@ describe("LogViewer", () => {
     await waitForAssertion(() => {
       expect(container.textContent).toContain("로그 없음");
     });
+    expect(container.querySelector(".log-viewer__window-controls")).toBeNull();
+    expect(container.querySelector(".log-viewer__toolbar")).toBeNull();
+    expect(container.querySelector(".log-viewer__body")).toBeNull();
 
     act(() => root.unmount());
     container.remove();
@@ -1694,14 +3592,12 @@ describe("TrainingRunPage", () => {
   });
 
   it("prioritizes backend best metric summary cards before last epoch", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url.endsWith("/api/projects/project-1/training-runs/run-1")) {
           return new Response(
             JSON.stringify({
-              artifact_path: null,
+              artifact_path: "/tmp/train/run-1",
               config: {
                 batch: 16,
                 device: "cpu",
@@ -1742,8 +3638,45 @@ describe("TrainingRunPage", () => {
             { headers: { "Content-Type": "application/json" }, status: 200 },
           );
         }
-        if (url.endsWith("/api/projects/project-1/training-runs/run-1/artifacts")) {
-          return new Response(JSON.stringify([]), {
+        if (url.endsWith("/api/projects/project-1/training-runs/run-1/downloads")) {
+          return new Response(JSON.stringify([
+            {
+              filename: "results.csv",
+              kind: "metrics",
+              label: "results.csv",
+              url: "/api/projects/project-1/training-runs/run-1/results.csv",
+            },
+            {
+              filename: "best.pt",
+              kind: "model_best",
+              label: "best.pt",
+              url: "/api/projects/project-1/training-runs/run-1/artifacts/artifact-best/download",
+            },
+            {
+              filename: "last.pt",
+              kind: "model_last",
+              label: "last.pt",
+              url: "/api/projects/project-1/training-runs/run-1/artifacts/artifact-last/download",
+            },
+            {
+              filename: "args.yaml",
+              kind: "config",
+              label: "args.yaml",
+              url: "/api/projects/project-1/training-runs/run-1/downloads/args.yaml",
+            },
+            {
+              filename: "results.png",
+              kind: "report_image",
+              label: "results.png",
+              url: "/api/projects/project-1/training-runs/run-1/downloads/results.png",
+            },
+            {
+              filename: "confusion_matrix.png",
+              kind: "report_image",
+              label: "confusion_matrix.png",
+              url: "/api/projects/project-1/training-runs/run-1/downloads/confusion_matrix.png",
+            },
+          ]), {
             headers: { "Content-Type": "application/json" },
             status: 200,
           });
@@ -1755,27 +3688,168 @@ describe("TrainingRunPage", () => {
           });
         }
         return new Response("not found", { status: 404 });
-      }),
-    );
+      });
+    vi.stubGlobal("fetch", fetchMock);
 
     const { container, root } = renderWithQuery(
       <TrainingRunPage projectId="project-1" runId="run-1" />,
     );
 
     await waitForAssertion(() => {
-      expect(container.querySelectorAll(".metric-card span").length).toBeGreaterThanOrEqual(3);
+      expect(container.querySelectorAll(".training-detail__summary span").length).toBeGreaterThanOrEqual(3);
     });
 
-    const metricLabels = Array.from(container.querySelectorAll(".metric-card span")).map(
+    const metricLabels = Array.from(container.querySelectorAll(".training-detail__summary span")).map(
       (element) => element.textContent,
     );
 
     expect(metricLabels.slice(0, 3)).toEqual([
-      "Best mAP50",
-      "Best Precision",
-      "Best Recall",
+      "mAP50",
+      "Precision",
+      "Recall",
     ]);
     expect(metricLabels).not.toContain("Last epoch");
+    expect(container.querySelector(".training-detail__model")?.textContent).toContain("yolo11n");
+    expect(metricLabels).not.toContain("생성");
+    expect(metricLabels).not.toContain("시작");
+    expect(metricLabels).not.toContain("종료");
+    expect(container.textContent).not.toContain("Snapshot");
+    expect(container.textContent).not.toContain("learning_rate");
+    expect(container.textContent).not.toContain("생성");
+    expect(container.textContent).toContain("시작");
+    expect(container.textContent).toContain("종료");
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("results.csv");
+      expect(container.textContent).toContain("best.pt");
+      expect(container.textContent).toContain("last.pt");
+      expect(container.textContent).toContain("args.yaml");
+      expect(container.textContent).toContain("results.png");
+      expect(container.textContent).toContain("confusion_matrix.png");
+      const downloadLabels = Array.from(
+        container.querySelectorAll<HTMLAnchorElement>(".training-detail__downloads a"),
+      ).map((link) => link.textContent);
+      expect(downloadLabels).toEqual(["results.csv", "best.pt", "last.pt", "args.yaml"]);
+      expect(
+        container.querySelector<HTMLImageElement>("img[src$='/downloads/results.png']"),
+      ).not.toBeNull();
+      expect(container.querySelector(".training-image-modal")).toBeNull();
+      const reportButton = container.querySelector<HTMLButtonElement>(
+        ".training-report-card button",
+      );
+      expect(reportButton).not.toBeNull();
+      act(() => {
+        Simulate.click(reportButton as HTMLButtonElement);
+      });
+      expect(container.querySelector(".training-image-modal")).not.toBeNull();
+      expect(
+        container.querySelector<HTMLImageElement>(
+          ".training-image-modal img[src$='/downloads/results.png']",
+        ),
+      ).not.toBeNull();
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      });
+      expect(container.querySelector(".training-image-modal")).toBeNull();
+      expect(container.textContent).not.toContain("모델 파일");
+      expect(container.querySelector(".data-table")).toBeNull();
+      expect(container.textContent?.indexOf("mAP50")).toBeLessThan(
+        container.textContent?.indexOf("results.csv") ?? -1,
+      );
+    });
+    await waitForAssertion(() => {
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).includes("/logs?tail=200")),
+      ).toBe(true);
+      expect(container.textContent).toContain("로그 없음");
+      expect(container.textContent).not.toContain("로그 보기");
+      expect(container.textContent).not.toContain("로그 숨기기");
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("shows legacy download buttons when the downloads endpoint is unavailable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/projects/project-1/training-runs/run-legacy")) {
+          return new Response(
+            JSON.stringify({
+              artifact_path: "/tmp/train/run-legacy",
+              config: {},
+              created_at: "2026-07-02T00:00:00Z",
+              dataset_id: "dataset-1",
+              finished_at: null,
+              id: "run-legacy",
+              log_path: null,
+              metrics_summary: { best_mAP50: 0.91 },
+              model_name: "yolo11n",
+              name: "legacy run",
+              project_id: "project-1",
+              split_id: "split-1",
+              started_at: null,
+              status: "completed",
+              trainer: "ultralytics",
+              updated_at: "2026-07-02T00:00:00Z",
+            }),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs/run-legacy/metrics")) {
+          return new Response(JSON.stringify({ rows: [], summary: { best_mAP50: 0.91 } }), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs/run-legacy/downloads")) {
+          return new Response("not found", { status: 404 });
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs/run-legacy/artifacts")) {
+          return new Response(
+            JSON.stringify([
+              {
+                created_at: "2026-07-02T00:00:00Z",
+                id: "artifact-best",
+                kind: "best",
+                metrics_snapshot: {},
+                path: "/tmp/train/run-legacy/weights/best.pt",
+                training_run_id: "run-legacy",
+                updated_at: "2026-07-02T00:00:00Z",
+              },
+              {
+                created_at: "2026-07-02T00:00:00Z",
+                id: "artifact-last",
+                kind: "last",
+                metrics_snapshot: {},
+                path: "/tmp/train/run-legacy/weights/last.pt",
+                training_run_id: "run-legacy",
+                updated_at: "2026-07-02T00:00:00Z",
+              },
+            ]),
+            { headers: { "Content-Type": "application/json" }, status: 200 },
+          );
+        }
+        if (url.endsWith("/api/projects/project-1/training-runs/run-legacy/logs?tail=200")) {
+          return new Response(JSON.stringify({ lines: [], offset: 0 }), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const { container, root } = renderWithQuery(
+      <TrainingRunPage projectId="project-1" runId="run-legacy" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("results.csv");
+      expect(container.textContent).toContain("best.pt");
+      expect(container.textContent).toContain("last.pt");
+    });
 
     act(() => root.unmount());
     container.remove();

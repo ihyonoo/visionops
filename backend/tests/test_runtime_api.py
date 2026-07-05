@@ -106,6 +106,16 @@ def test_runtime_check_offers_cuda_install_only_when_cuda_device_exists(client, 
     assert [option["profile"] for option in body["install_options"]] == ["cpu", "cuda"]
 
 
+def test_runtime_install_plan_uses_windows_venv_scripts_path(monkeypatch):
+    monkeypatch.setattr(runtime_service.sys, "platform", "win32")
+
+    option = runtime_service._install_options([])[0]
+
+    assert "Scripts" in option.commands[1]
+    assert "python.exe" in option.commands[1]
+    assert "bin/python" not in option.commands[1]
+
+
 def test_runtime_install_invokes_managed_installer(client, monkeypatch):
     called = {}
 

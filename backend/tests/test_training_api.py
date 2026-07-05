@@ -1,5 +1,6 @@
 from collections.abc import Generator
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -159,6 +160,7 @@ def test_post_training_run_creates_queued_run_and_job(client, db, tmp_path):
 
     assert response.status_code == 201
     body = response.json()
+    assert re.fullmatch(r"trn_[2-9a-z]{10}", body["id"])
     assert body["project_id"] == project.id
     assert body["dataset_id"] == dataset.id
     assert body["split_id"] == split.id
@@ -172,6 +174,7 @@ def test_post_training_run_creates_queued_run_and_job(client, db, tmp_path):
     assert run is not None
     job = db.scalar(select(Job).where(Job.type == "training", Job.target_id == run.id))
     assert job is not None
+    assert re.fullmatch(r"job_[2-9a-z]{10}", job.id)
     assert job.status == "queued"
 
 
@@ -302,6 +305,7 @@ def test_training_worker_completes_run_and_creates_artifacts(db, tmp_path, monke
         db.scalars(select(ModelArtifact).where(ModelArtifact.training_run_id == run.id))
     )
     assert {artifact.kind for artifact in artifacts} == {"best", "last"}
+    assert all(re.fullmatch(r"art_[2-9a-z]{10}", artifact.id) for artifact in artifacts)
     assert all(Path(artifact.path).exists() for artifact in artifacts)
     assert Path(run.log_path).read_text(encoding="utf-8").strip() == "worker fake training"
 

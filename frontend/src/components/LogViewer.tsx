@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Radio, Terminal } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { apiGet } from "../api/client";
 import type { TrainingLog } from "../api/types";
@@ -70,7 +69,6 @@ function mergeTailWithCurrent(tailLines: string[], currentLines: string[]): stri
 export function LogViewer({ projectId, runId, status }: LogViewerProps) {
   const { t } = useLanguage();
   const [lines, setLines] = useState<string[]>([]);
-  const [streamState, setStreamState] = useState<"idle" | "connected" | "unavailable">("idle");
   const preRef = useRef<HTMLPreElement | null>(null);
 
   const logsQuery = useQuery({
@@ -90,15 +88,12 @@ export function LogViewer({ projectId, runId, status }: LogViewerProps) {
 
   useEffect(() => {
     if (!shouldStream(status)) {
-      setStreamState("idle");
       return;
     }
     if (logsQuery.isLoading) {
-      setStreamState("idle");
       return;
     }
     if (typeof EventSource === "undefined") {
-      setStreamState("unavailable");
       return;
     }
 
@@ -107,7 +102,6 @@ export function LogViewer({ projectId, runId, status }: LogViewerProps) {
         ? logsQuery.data.offset
         : null;
     const source = new EventSource(buildStreamUrl(projectId, runId, offset));
-    setStreamState("connected");
 
     source.onmessage = (event) => {
       const incomingLines = linesFromEventData(event.data);
@@ -116,7 +110,6 @@ export function LogViewer({ projectId, runId, status }: LogViewerProps) {
     };
 
     source.onerror = () => {
-      setStreamState("unavailable");
       source.close();
     };
 
@@ -129,31 +122,8 @@ export function LogViewer({ projectId, runId, status }: LogViewerProps) {
     element.scrollTop = element.scrollHeight;
   }, [lines]);
 
-  const streamLabel = useMemo(() => {
-    if (!shouldStream(status)) return t("log.saved");
-    if (streamState === "connected") return t("log.connected");
-    if (streamState === "unavailable") return t("log.unavailable");
-    return t("log.ready");
-  }, [status, streamState, t]);
-
   return (
     <div className="log-viewer">
-      <div className="log-viewer__toolbar">
-        <span>
-          <i className="log-viewer__window-controls" aria-hidden="true">
-            <b />
-            <b />
-            <b />
-          </i>
-          <Terminal aria-hidden="true" size={16} />
-          {t("log.title")}
-        </span>
-        <small data-state={streamState}>
-          <Radio aria-hidden="true" size={14} />
-          {streamLabel}
-        </small>
-      </div>
-
       {logsQuery.isError ? (
         <div className="notice notice--warning" role="alert">
           {t("log.tailError")}

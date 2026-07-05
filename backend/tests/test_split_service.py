@@ -61,6 +61,34 @@ def test_create_copy_split_writes_expected_artifacts(tmp_path):
     assert manifest["class_distribution"] == {"scratch": 4}
 
 
+def test_create_copy_split_can_write_optional_test_subset(tmp_path):
+    dataset_root = _make_dataset(tmp_path / "dataset", image_count=10)
+    split_root = tmp_path / "split"
+
+    result = create_copy_split(
+        dataset_root,
+        split_root,
+        train_ratio=0.8,
+        val_ratio=0.1,
+        test_ratio=0.1,
+        seed=42,
+    )
+
+    assert result.train_count == 8
+    assert result.val_count == 1
+    assert result.test_count == 1
+    assert len(list((split_root / "images" / "test").glob("*.jpg"))) == 1
+    assert len(list((split_root / "labels" / "test").glob("*.txt"))) == 1
+
+    data_yaml = yaml.safe_load((split_root / "data.yaml").read_text(encoding="utf-8"))
+    assert data_yaml["test"] == "images/test"
+
+    manifest = json.loads((split_root / "split_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["test_ratio"] == 0.1
+    assert len(manifest["test_files"]) == 1
+    assert manifest["test_count"] == 1
+
+
 def test_create_copy_split_preserves_nested_paths_and_creates_empty_missing_label(tmp_path):
     dataset_root = tmp_path / "dataset"
     (dataset_root / "images" / "nested").mkdir(parents=True)

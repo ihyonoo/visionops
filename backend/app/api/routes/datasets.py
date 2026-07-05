@@ -1,4 +1,3 @@
-import uuid
 from pathlib import Path
 from pathlib import PurePosixPath
 import shutil
@@ -6,14 +5,24 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import get_db
-from app.models import Dataset, Project
-from app.schemas import DatasetCreate, DatasetRead
-from app.services.dataset_validation import validate_yolo_dataset
+from app.models import (
+    Dataset,
+    DatasetSplit,
+    InferencePrediction,
+    InferenceRun,
+    Job,
+    ModelArtifact,
+    Project,
+    TrainingRun,
+)
+from app.schemas import DatasetCreate, DatasetRead, DatasetUpdate
+from app.services.dataset_validation import load_class_names
+from app.services.ids import new_id
 from app.services.storage import StoragePaths
 
 router = APIRouter(prefix="/api/projects/{project_id}/datasets", tags=["datasets"])
@@ -45,6 +54,29 @@ def _first_dataset_image(dataset: Dataset) -> Path | None:
     return None
 
 
+def _dataset_inventory(dataset_root: Path) -> tuple[list[str], int, int]:
+    try:
+        class_names = load_class_names(dataset_root)
+    except (FileNotFoundError, OSError, ValueError):
+        class_names = []
+
+    images_root = dataset_root / "images"
+    image_count = 0
+    if images_root.is_dir():
+        image_count = sum(
+            1
+            for image_path in images_root.rglob("*")
+            if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS
+        )
+
+    labels_root = dataset_root / "labels"
+    label_count = 0
+    if labels_root.is_dir():
+        label_count = sum(1 for label_path in labels_root.rglob("*.txt") if label_path.is_file())
+
+    return class_names, image_count, label_count
+
+
 @router.post("", response_model=DatasetRead, status_code=status.HTTP_201_CREATED)
 def create_dataset(
     project_id: str,
@@ -52,23 +84,18 @@ def create_dataset(
     db: Annotated[Session, Depends(get_db)],
 ) -> Dataset:
     _require_project(db, project_id)
-    validation = validate_yolo_dataset(Path(payload.source_path))
-    if validation.status != "valid":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"validation_summary": validation.to_summary()},
-        )
+    class_names, image_count, label_count = _dataset_inventory(Path(payload.source_path))
     dataset = Dataset(
-        id=uuid.uuid4().hex,
+        id=new_id("ds"),
         project_id=project_id,
         name=payload.name,
         source_path=payload.source_path,
         format="yolo",
-        class_names=validation.class_names,
-        image_count=validation.image_count,
-        label_count=validation.label_count,
-        validation_status=validation.status,
-        validation_summary=validation.to_summary(),
+        class_names=class_names,
+        image_count=image_count,
+        label_count=label_count,
+        validation_status="unknown",
+        validation_summary={},
     )
     db.add(dataset)
     db.commit()
@@ -149,7 +176,7 @@ def upload_dataset(
     db: Annotated[Session, Depends(get_db)],
 ) -> Dataset:
     _require_project(db, project_id)
-    dataset_id = uuid.uuid4().hex
+    dataset_id = new_id("ds")
     dataset_root = _save_dataset_upload(
         project_id=project_id,
         dataset_id=dataset_id,
@@ -157,13 +184,7 @@ def upload_dataset(
         labels=labels,
         data_yaml=data_yaml,
     )
-    validation = validate_yolo_dataset(dataset_root)
-    if validation.status != "valid":
-        shutil.rmtree(dataset_root, ignore_errors=True)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"validation_summary": validation.to_summary()},
-        )
+    class_names, image_count, label_count = _dataset_inventory(dataset_root)
 
     dataset = Dataset(
         id=dataset_id,
@@ -171,11 +192,11 @@ def upload_dataset(
         name=name.strip(),
         source_path=str(dataset_root),
         format="yolo",
-        class_names=validation.class_names,
-        image_count=validation.image_count,
-        label_count=validation.label_count,
-        validation_status=validation.status,
-        validation_summary=validation.to_summary(),
+        class_names=class_names,
+        image_count=image_count,
+        label_count=label_count,
+        validation_status="unknown",
+        validation_summary={},
     )
     try:
         db.add(dataset)
@@ -211,6 +232,21 @@ def get_dataset(
     return _require_dataset(db, project_id, dataset_id)
 
 
+@router.patch("/{dataset_id}", response_model=DatasetRead)
+def update_dataset(
+    project_id: str,
+    dataset_id: str,
+    payload: DatasetUpdate,
+    db: Annotated[Session, Depends(get_db)],
+) -> Dataset:
+    dataset = _require_dataset(db, project_id, dataset_id)
+    dataset.name = payload.name
+    db.add(dataset)
+    db.commit()
+    db.refresh(dataset)
+    return dataset
+
+
 @router.get("/{dataset_id}/thumbnail")
 def get_dataset_thumbnail(
     project_id: str,
@@ -222,3 +258,100 @@ def get_dataset_thumbnail(
     if image_path is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset thumbnail not found")
     return FileResponse(image_path)
+
+
+def _managed_project_root(project_id: str) -> Path:
+    return StoragePaths(settings.artifact_root).ensure_root() / "projects" / project_id
+
+
+def _remove_managed_child(path: Path, managed_root: Path) -> None:
+    try:
+        resolved_path = path.resolve()
+        resolved_root = managed_root.resolve()
+    except OSError:
+        return
+    if resolved_path == resolved_root or resolved_root not in resolved_path.parents:
+        return
+    shutil.rmtree(resolved_path, ignore_errors=True)
+
+
+@router.delete("/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_dataset(
+    project_id: str,
+    dataset_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    dataset = _require_dataset(db, project_id, dataset_id)
+    training_run_ids = list(
+        db.scalars(select(TrainingRun.id).where(TrainingRun.dataset_id == dataset_id))
+    )
+    artifact_ids = (
+        list(
+            db.scalars(
+                select(ModelArtifact.id).where(
+                    ModelArtifact.training_run_id.in_(training_run_ids)
+                )
+            )
+        )
+        if training_run_ids
+        else []
+    )
+    inference_run_ids = (
+        list(
+            db.scalars(
+                select(InferenceRun.id).where(InferenceRun.model_artifact_id.in_(artifact_ids))
+            )
+        )
+        if artifact_ids
+        else []
+    )
+
+    managed_project_root = _managed_project_root(project_id)
+    paths_to_remove = [managed_project_root / "datasets" / dataset_id]
+    if training_run_ids:
+        paths_to_remove.extend(
+            managed_project_root / "runs" / "train" / run_id
+            for run_id in training_run_ids
+        )
+    if inference_run_ids:
+        paths_to_remove.extend(
+            managed_project_root / "runs" / "inference" / run_id
+            for run_id in inference_run_ids
+        )
+        paths_to_remove.extend(
+            managed_project_root / "runs" / "inference_inputs" / run_id
+            for run_id in inference_run_ids
+        )
+
+    if inference_run_ids:
+        db.execute(
+            delete(InferencePrediction).where(
+                InferencePrediction.inference_run_id.in_(inference_run_ids)
+            )
+        )
+        db.execute(
+            delete(Job).where(
+                Job.type == "inference",
+                Job.target_id.in_(inference_run_ids),
+            )
+        )
+        db.execute(delete(InferenceRun).where(InferenceRun.id.in_(inference_run_ids)))
+
+    if training_run_ids:
+        db.execute(
+            delete(ModelArtifact).where(ModelArtifact.training_run_id.in_(training_run_ids))
+        )
+        db.execute(
+            delete(Job).where(
+                Job.type == "training",
+                Job.target_id.in_(training_run_ids),
+            )
+        )
+        db.execute(delete(TrainingRun).where(TrainingRun.id.in_(training_run_ids)))
+
+    db.execute(delete(DatasetSplit).where(DatasetSplit.dataset_id == dataset_id))
+    db.delete(dataset)
+    db.commit()
+
+    for path in paths_to_remove:
+        _remove_managed_child(path, managed_project_root)

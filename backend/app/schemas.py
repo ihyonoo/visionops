@@ -32,6 +32,10 @@ class DatasetCreate(BaseModel):
     source_path: NonEmptyString
 
 
+class DatasetUpdate(BaseModel):
+    name: NonEmptyString
+
+
 class DatasetRead(BaseModel):
     id: str
     project_id: str
@@ -52,7 +56,12 @@ class DatasetSplitCreate(BaseModel):
     name: NonEmptyString
     train_ratio: float
     val_ratio: float
+    test_ratio: float = 0.0
     seed: int = 42
+
+
+class DatasetSplitUpdate(BaseModel):
+    name: NonEmptyString
 
 
 class DatasetSplitRead(BaseModel):
@@ -61,9 +70,11 @@ class DatasetSplitRead(BaseModel):
     name: str
     train_ratio: float
     val_ratio: float
+    test_ratio: float
     seed: int
     train_count: int
     val_count: int
+    test_count: int
     split_path: str
     dataset_yaml_path: str
     created_at: datetime
@@ -169,6 +180,7 @@ class TrainingPreflightRead(BaseModel):
     selected_device: dict
     runtime: dict
     suggested_config: dict
+    command_preview: dict
 
 
 class ModelArtifactRead(BaseModel):
@@ -181,6 +193,13 @@ class ModelArtifactRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TrainingDownloadRead(BaseModel):
+    filename: str
+    label: str
+    kind: str
+    url: str
 
 
 class InferenceConfig(BaseModel):

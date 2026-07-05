@@ -1,10 +1,10 @@
-import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models import Job
+from app.services.ids import new_id
 
 QUEUED = "queued"
 RUNNING = "running"
@@ -15,7 +15,7 @@ CANCELLED = "cancelled"
 
 def enqueue_job(db: Session, job_type: str, target_id: str, priority: int = 100) -> Job:
     job = Job(
-        id=uuid.uuid4().hex,
+        id=new_id("job"),
         type=job_type,
         target_id=target_id,
         status=QUEUED,

@@ -2,7 +2,9 @@ from collections.abc import Generator
 import json
 import os
 from pathlib import Path
+import re
 
+from PIL import Image, ImageChops
 import pytest
 from sqlalchemy import select
 
@@ -56,6 +58,36 @@ sys.exit({exit_code})
     return executable
 
 
+def make_absolute_project_yolo_predict(tmp_path: Path) -> Path:
+    executable = tmp_path / "bin" / "yolo"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text(
+        """#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+args = dict(arg.split("=", 1) for arg in sys.argv[3:] if "=" in arg)
+project = Path(args["project"])
+if not project.is_absolute():
+    print(f"project path is not absolute: {project}")
+    sys.exit(9)
+run_dir = project / args["name"]
+run_dir.mkdir(parents=True, exist_ok=True)
+(run_dir / "image1.jpg").write_text("rendered", encoding="utf-8")
+(run_dir / "labels").mkdir(parents=True, exist_ok=True)
+(run_dir / "labels" / "image1.txt").write_text(
+    "0 0.5 0.5 0.2 0.3 0.91\\n",
+    encoding="utf-8",
+)
+print("absolute project inference")
+sys.exit(0)
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
 def make_fake_yolo_predict_without_detections(tmp_path: Path) -> Path:
     executable = tmp_path / "bin" / "yolo"
     executable.parent.mkdir(parents=True, exist_ok=True)
@@ -68,6 +100,35 @@ args = dict(arg.split("=", 1) for arg in sys.argv[3:] if "=" in arg)
 run_dir = Path(args["project"]) / args["name"]
 run_dir.mkdir(parents=True, exist_ok=True)
 print("fake inference without detections")
+sys.exit(0)
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+def make_fake_yolo_predict_with_plain_output(tmp_path: Path) -> Path:
+    executable = tmp_path / "bin" / "yolo"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text(
+        """#!/usr/bin/env python3
+import shutil
+import sys
+from pathlib import Path
+
+args = dict(arg.split("=", 1) for arg in sys.argv[3:] if "=" in arg)
+source = Path(args["source"])
+input_image = next(path for path in source.iterdir() if path.suffix.lower() == ".jpg")
+run_dir = Path(args["project"]) / args["name"]
+run_dir.mkdir(parents=True, exist_ok=True)
+shutil.copy2(input_image, run_dir / input_image.name)
+(run_dir / "labels").mkdir(parents=True, exist_ok=True)
+(run_dir / "labels" / f"{input_image.stem}.txt").write_text(
+    "0 0.5 0.5 0.5 0.5 0.91\\n",
+    encoding="utf-8",
+)
+print("plain yolo output")
 sys.exit(0)
 """,
         encoding="utf-8",
@@ -180,6 +241,7 @@ def test_post_inference_run_creates_queued_run_and_job(client, db, tmp_path):
 
     assert response.status_code == 201
     body = response.json()
+    assert re.fullmatch(r"inf_[2-9a-z]{10}", body["id"])
     assert body["project_id"] == project.id
     assert body["model_artifact_id"] == artifact.id
     assert body["status"] == "queued"
@@ -189,6 +251,7 @@ def test_post_inference_run_creates_queued_run_and_job(client, db, tmp_path):
     assert run is not None
     job = db.scalar(select(Job).where(Job.type == "inference", Job.target_id == run.id))
     assert job is not None
+    assert re.fullmatch(r"job_[2-9a-z]{10}", job.id)
     assert job.status == "queued"
 
 
@@ -245,6 +308,40 @@ def test_upload_inference_single_image_creates_managed_file(client, db, tmp_path
     assert body["input_type"] == "image"
     assert Path(body["input_path"]).is_file()
     assert Path(body["input_path"]).read_bytes() == b"image"
+
+
+def test_upload_inference_folder_rejects_single_flat_image(client, db, tmp_path):
+    project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+
+    response = client.post(
+        f"/api/projects/{project.id}/inference-runs/upload",
+        data={
+            "name": "wrong-folder",
+            "model_artifact_id": artifact.id,
+            "input_type": "folder",
+        },
+        files=[("inputs", ("sample.jpg", b"image", "image/jpeg"))],
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "폴더 추론에는 이미지 폴더를 선택하세요."
+
+
+def test_upload_inference_image_rejects_folder_upload(client, db, tmp_path):
+    project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+
+    response = client.post(
+        f"/api/projects/{project.id}/inference-runs/upload",
+        data={
+            "name": "wrong-image",
+            "model_artifact_id": artifact.id,
+            "input_type": "image",
+        },
+        files=[("inputs", ("images/sample.jpg", b"image", "image/jpeg"))],
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "단일 이미지 추론에는 이미지 파일 1개만 선택하세요."
 
 
 def test_post_inference_run_accepts_single_image_alias(client, db, tmp_path):
@@ -409,9 +506,94 @@ def test_inference_worker_completes_run_and_writes_predictions_json(
         select(InferencePrediction).where(InferencePrediction.inference_run_id == run.id)
     )
     assert prediction is not None
+    assert re.fullmatch(r"pred_[2-9a-z]{10}", prediction.id)
     assert prediction.image_path == str(input_dir / "image1.jpg")
     assert prediction.max_confidence == 0.91
     assert prediction.class_names == ["scratch"]
+
+
+def test_inference_worker_passes_absolute_project_path_to_yolo(db, tmp_path, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(settings, "artifact_root", Path("relative-artifacts"))
+    project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+    fake_yolo = make_absolute_project_yolo_predict(tmp_path)
+    monkeypatch.setenv("PATH", f"{fake_yolo.parent}:{os.environ.get('PATH', '')}")
+    input_dir = tmp_path / "images"
+    input_dir.mkdir()
+    Image.new("RGB", (240, 160), color="white").save(input_dir / "image1.jpg")
+    run = InferenceRun(
+        id="inference-relative-root",
+        project_id=project.id,
+        model_artifact_id=artifact.id,
+        name="batch-test",
+        input_type="folder",
+        input_path=str(input_dir),
+        status="queued",
+        config={"conf": 0.25, "imgsz": 640},
+    )
+    job = Job(id="job-inference-relative-root", type="inference", target_id=run.id, status="running")
+    db.add_all([run, job])
+    db.commit()
+
+    handle_inference_job(db, job)
+
+    db.refresh(run)
+    db.refresh(job)
+    assert run.status == "completed"
+    assert job.status == "completed"
+    assert run.output_path is not None
+    assert Path(run.output_path).is_absolute()
+    prediction = db.scalar(
+        select(InferencePrediction).where(InferencePrediction.inference_run_id == run.id)
+    )
+    assert prediction is not None
+    assert prediction.output_image_path != prediction.image_path
+    assert Path(prediction.output_image_path).is_absolute()
+    assert "visionops_rendered" in Path(prediction.output_image_path).parts
+    assert Path(prediction.output_image_path).is_file()
+
+
+def test_inference_worker_generates_visionops_rendered_image_from_detections(
+    db, tmp_path, monkeypatch
+):
+    project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+    fake_yolo = make_fake_yolo_predict_with_plain_output(tmp_path)
+    monkeypatch.setenv("PATH", f"{fake_yolo.parent}:{os.environ.get('PATH', '')}")
+    input_dir = tmp_path / "images"
+    input_dir.mkdir()
+    source_image = input_dir / "image1.jpg"
+    Image.new("RGB", (240, 160), color="white").save(source_image)
+    run = InferenceRun(
+        id="inference-visionops-render",
+        project_id=project.id,
+        model_artifact_id=artifact.id,
+        name="batch-test",
+        input_type="folder",
+        input_path=str(input_dir),
+        status="queued",
+        config={"conf": 0.25, "imgsz": 640},
+    )
+    job = Job(id="job-inference-visionops-render", type="inference", target_id=run.id, status="running")
+    db.add_all([run, job])
+    db.commit()
+
+    handle_inference_job(db, job)
+
+    db.refresh(run)
+    assert run.status == "completed"
+    prediction = db.scalar(
+        select(InferencePrediction).where(InferencePrediction.inference_run_id == run.id)
+    )
+    assert prediction is not None
+    assert "visionops_rendered" in Path(prediction.output_image_path).parts
+    assert Path(prediction.output_image_path).is_file()
+    assert Path(prediction.output_image_path) != Path(run.output_path, source_image.name)
+
+    original = Image.open(source_image).convert("RGB")
+    rendered = Image.open(prediction.output_image_path).convert("RGB")
+    assert ImageChops.difference(original, rendered).getbbox() is not None
 
 
 def test_inference_worker_records_input_images_when_no_detections(
@@ -448,7 +630,8 @@ def test_inference_worker_records_input_images_when_no_detections(
     )
     assert prediction is not None
     assert prediction.image_path == str(input_dir / "image1.jpg")
-    assert prediction.output_image_path == str(input_dir / "image1.jpg")
+    assert prediction.output_image_path == ""
+    assert prediction.prediction_json["output_image_path"] == ""
     assert prediction.prediction_json["detections"] == []
     assert prediction.max_confidence == 0.0
 
@@ -716,3 +899,91 @@ def test_prediction_image_endpoint_serves_rendered_image(client, db, tmp_path):
     assert response.status_code == 200
     assert response.content == b"rendered-image"
     assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+
+
+def test_prediction_image_endpoint_rejects_missing_rendered_image(client, db, tmp_path):
+    project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+    run = InferenceRun(
+        id="inference-missing-render-api",
+        project_id=project.id,
+        model_artifact_id=artifact.id,
+        name="batch-test",
+        input_type="image",
+        input_path=str(tmp_path / "image1.jpg"),
+        status="completed",
+        config={"conf": 0.25, "imgsz": 640},
+        output_path=str(tmp_path / "outputs"),
+        prediction_count=1,
+    )
+    prediction = InferencePrediction(
+        id="prediction-missing-render-1",
+        inference_run_id=run.id,
+        image_path=str(tmp_path / "image1.jpg"),
+        output_image_path="",
+        prediction_json={"detections": [], "output_image_path": ""},
+        class_names=["scratch"],
+        max_confidence=0.0,
+    )
+    db.add_all([run, prediction])
+    db.commit()
+
+    response = client.get(
+        f"/api/projects/{project.id}/inference-runs/{run.id}/predictions/{prediction.id}/image"
+    )
+
+    assert response.status_code == 404
+
+
+def test_delete_inference_run_removes_records_jobs_and_managed_files(client, db, tmp_path):
+    from app.core.config import settings
+    from app.services.storage import StoragePaths
+
+    project, _dataset, _training_run, artifact = _create_project_training_artifact(db, tmp_path)
+    storage_paths = StoragePaths(settings.artifact_root)
+    output_dir = storage_paths.inference_run_dir(project.id, "inference-delete")
+    input_dir = storage_paths.inference_input_dir(project.id, "inference-delete")
+    output_image = output_dir / "visionops_rendered" / "part.jpg"
+    input_image = input_dir / "part.jpg"
+    output_image.parent.mkdir(parents=True, exist_ok=True)
+    input_image.parent.mkdir(parents=True, exist_ok=True)
+    output_image.write_text("rendered", encoding="utf-8")
+    input_image.write_text("input", encoding="utf-8")
+
+    run = InferenceRun(
+        id="inference-delete",
+        project_id=project.id,
+        model_artifact_id=artifact.id,
+        name="delete-me",
+        input_type="folder",
+        input_path=str(input_dir),
+        status="completed",
+        config={"conf": 0.25, "imgsz": 640},
+        output_path=str(output_dir),
+        prediction_count=1,
+    )
+    prediction = InferencePrediction(
+        id="prediction-delete",
+        inference_run_id=run.id,
+        image_path=str(input_image),
+        output_image_path=str(output_image),
+        prediction_json={"detections": [], "output_image_path": str(output_image)},
+        class_names=["scratch"],
+        max_confidence=0.0,
+    )
+    job = Job(id="job-inference-delete", type="inference", target_id=run.id, status="completed")
+    db.add_all([run, prediction, job])
+    db.commit()
+    run_id = run.id
+    prediction_id = prediction.id
+    job_id = job.id
+
+    response = client.delete(f"/api/projects/{project.id}/inference-runs/{run_id}")
+
+    assert response.status_code == 204
+    db.expire_all()
+    assert db.get(InferenceRun, run_id) is None
+    assert db.get(InferencePrediction, prediction_id) is None
+    assert db.get(Job, job_id) is None
+    assert not output_dir.exists()
+    assert not input_dir.exists()

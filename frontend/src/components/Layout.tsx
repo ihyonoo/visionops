@@ -1,30 +1,347 @@
 import {
+  Activity,
   Bell,
+  ClipboardList,
+  Database,
+  Eye,
+  EyeOff,
   FolderKanban,
+  Loader2,
+  PlayCircle,
+  Plus,
   Search,
   Settings,
 } from "lucide-react";
-import { ReactNode, useState } from "react";
+import { CSSProperties, PointerEvent, ReactNode, useEffect, useRef, useState } from "react";
 
+import type { Project } from "../api/types";
 import { LanguageControl, useLanguage } from "../i18n/LanguageProvider";
 import { ThemeControl } from "../theme/ThemeProvider";
 
+export type GlobalSection =
+  | "projects"
+  | "datasets"
+  | "training"
+  | "training-management"
+  | "inference";
+
+export type ProjectSort = "updated_desc" | "name_asc";
+
 type LayoutProps = {
+  activeSection: GlobalSection;
   children: ReactNode;
-  currentView: "projects" | "project-detail";
-  onOpenProjects: () => void;
+  hiddenProjectIds?: string[];
+  onCreateProject?: () => void;
+  onProjectSortChange?: (sort: ProjectSort) => void;
+  onSelectProject?: (projectId: string) => void;
+  onToggleProjectHidden?: (projectId: string) => void;
+  onNavigate: (section: GlobalSection) => void;
+  projects?: Project[];
+  projectsLoading?: boolean;
+  projectSort?: ProjectSort;
+  selectedProjectId?: string | null;
   title: string;
 };
 
+const navItems: Array<{
+  icon: typeof FolderKanban;
+  key: GlobalSection;
+  labelKey: string;
+}> = [
+  { icon: Database, key: "datasets", labelKey: "nav.datasetsManagement" },
+  { icon: PlayCircle, key: "training", labelKey: "nav.modelTraining" },
+  { icon: ClipboardList, key: "training-management", labelKey: "nav.modelTrainingManagement" },
+  { icon: Activity, key: "inference", labelKey: "nav.inference" },
+];
+
+const SIDEBAR_WIDTH_KEY = "visionops:project-sidebar-width";
+const SIDEBAR_COLLAPSED_KEY = "visionops:project-sidebar-collapsed";
+const DEFAULT_SIDEBAR_WIDTH = 260;
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 420;
+const COLLAPSE_SIDEBAR_WIDTH = 140;
+const RAIL_SIDEBAR_WIDTH = 44;
+
+function clampSidebarWidth(width: number): number {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)));
+}
+
+function storedSidebarWidth(): number {
+  if (typeof window === "undefined") return DEFAULT_SIDEBAR_WIDTH;
+  const storedValue = window.localStorage?.getItem?.(SIDEBAR_WIDTH_KEY);
+  if (storedValue === null || storedValue === undefined) return DEFAULT_SIDEBAR_WIDTH;
+  const value = Number(storedValue);
+  return Number.isFinite(value) ? clampSidebarWidth(value) : DEFAULT_SIDEBAR_WIDTH;
+}
+
+function storedSidebarCollapsed(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage?.getItem?.(SIDEBAR_COLLAPSED_KEY) === "true";
+}
+
+function sortProjects(projects: Project[], sort: ProjectSort): Project[] {
+  return [...projects].sort((left, right) => {
+    if (sort === "name_asc") {
+      return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
+    }
+    return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
+  });
+}
+
+function ProjectSidebar({
+  hiddenProjectIds,
+  onCreateProject,
+  onProjectSortChange,
+  onSelectProject,
+  onToggleProjectHidden,
+  projects,
+  projectsLoading,
+  projectSort,
+  selectedProjectId,
+}: Required<
+  Pick<
+    LayoutProps,
+    | "hiddenProjectIds"
+    | "onCreateProject"
+    | "onProjectSortChange"
+    | "onSelectProject"
+    | "onToggleProjectHidden"
+    | "projects"
+    | "projectsLoading"
+    | "projectSort"
+  >
+> & {
+  selectedProjectId: string | null;
+}) {
+  const { t } = useLanguage();
+  const [searchQuery, setSearchQuery] = useState("");
+  const hiddenSet = new Set(hiddenProjectIds);
+  const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
+  const filteredProjects = normalizedSearchQuery
+    ? projects.filter((project) =>
+        `${project.name} ${project.description}`.toLocaleLowerCase().includes(normalizedSearchQuery),
+      )
+    : projects;
+  const sortedProjects = sortProjects(filteredProjects, projectSort);
+  const visibleProjects = sortedProjects.filter((project) => !hiddenSet.has(project.id));
+  const hiddenProjects = sortedProjects.filter((project) => hiddenSet.has(project.id));
+  const sidebarProjects = [...visibleProjects, ...hiddenProjects];
+
+  return (
+    <aside className="project-sidebar" aria-label={t("projectSidebar.label")}>
+      <div className="project-sidebar__header">
+        <div>
+          <strong>{t("projectSidebar.titleWithCount", { count: projects.length })}</strong>
+        </div>
+        <div className="project-sidebar__header-actions">
+          {projectsLoading ? <Loader2 aria-hidden="true" className="spin" size={16} /> : null}
+          <button
+            aria-label={t("projects.new")}
+            className="icon-button project-sidebar__create"
+            onClick={onCreateProject}
+            title={t("projects.new")}
+            type="button"
+          >
+            <Plus aria-hidden="true" size={17} />
+          </button>
+        </div>
+      </div>
+
+      <div className="project-sidebar__tools" aria-label={t("projectSidebar.sort")}>
+        <button
+          data-active={projectSort === "updated_desc" ? "true" : undefined}
+          onClick={() => onProjectSortChange("updated_desc")}
+          type="button"
+        >
+          {t("projectSidebar.sortUpdated")}
+        </button>
+        <button
+          data-active={projectSort === "name_asc" ? "true" : undefined}
+          onClick={() => onProjectSortChange("name_asc")}
+          type="button"
+        >
+          {t("projectSidebar.sortName")}
+        </button>
+      </div>
+
+      <label className="project-sidebar__search">
+        <Search aria-hidden="true" size={15} />
+        <input
+          aria-label={t("projectSidebar.search")}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder={t("projectSidebar.searchPlaceholder")}
+          type="search"
+          value={searchQuery}
+        />
+      </label>
+
+      <div className="project-sidebar__list">
+        {visibleProjects.map((project) => {
+          const isHidden = hiddenSet.has(project.id);
+          return (
+            <div
+              className="project-sidebar__row"
+              data-hidden={isHidden ? "true" : undefined}
+              data-selected={selectedProjectId === project.id ? "true" : undefined}
+              key={project.id}
+            >
+              <button
+                aria-disabled={isHidden ? "true" : undefined}
+                className="project-sidebar__project"
+                disabled={isHidden}
+                onClick={() => onSelectProject(project.id)}
+                type="button"
+              >
+                <span>
+                  <strong>{project.name}</strong>
+                </span>
+              </button>
+              <button
+                aria-label={
+                  isHidden
+                    ? t("projectSidebar.showProject", { name: project.name })
+                    : t("projectSidebar.hideProject", { name: project.name })
+                }
+                className="icon-button project-sidebar__hide"
+                onClick={() => onToggleProjectHidden(project.id)}
+                title={
+                  isHidden
+                    ? t("projectSidebar.showProject", { name: project.name })
+                    : t("projectSidebar.hideProject", { name: project.name })
+                }
+                type="button"
+              >
+                {isHidden ? (
+                  <EyeOff aria-hidden="true" size={16} />
+                ) : (
+                  <Eye aria-hidden="true" size={16} />
+                )}
+              </button>
+            </div>
+          );
+        })}
+        {hiddenProjects.length > 0 ? (
+          <div className="project-sidebar__hidden-label">
+            <span>{t("projectSidebar.hiddenGroup")}</span>
+          </div>
+        ) : null}
+        {hiddenProjects.map((project) => {
+          const isHidden = hiddenSet.has(project.id);
+          return (
+            <div
+              className="project-sidebar__row"
+              data-hidden="true"
+              data-selected={selectedProjectId === project.id ? "true" : undefined}
+              key={project.id}
+            >
+              <button
+                aria-disabled="true"
+                className="project-sidebar__project"
+                disabled
+                onClick={() => onSelectProject(project.id)}
+                type="button"
+              >
+                <span>
+                  <strong>{project.name}</strong>
+                </span>
+              </button>
+              <button
+                aria-label={t("projectSidebar.showProject", { name: project.name })}
+                className="icon-button project-sidebar__hide"
+                onClick={() => onToggleProjectHidden(project.id)}
+                title={t("projectSidebar.showProject", { name: project.name })}
+                type="button"
+              >
+                {isHidden ? (
+                  <EyeOff aria-hidden="true" size={15} />
+                ) : (
+                  <Eye aria-hidden="true" size={15} />
+                )}
+              </button>
+            </div>
+          );
+        })}
+        {!projectsLoading && sidebarProjects.length === 0 ? (
+          <div className="empty-state empty-state--compact">
+            <p>{t("projects.empty")}</p>
+          </div>
+        ) : null}
+      </div>
+    </aside>
+  );
+}
+
 export function Layout({
+  activeSection,
   children,
-  currentView,
-  onOpenProjects,
+  hiddenProjectIds = [],
+  onCreateProject = () => undefined,
+  onProjectSortChange = () => undefined,
+  onSelectProject = () => undefined,
+  onToggleProjectHidden = () => undefined,
+  onNavigate,
+  projects = [],
+  projectsLoading = false,
+  projectSort = "updated_desc",
+  selectedProjectId = null,
   title,
 }: LayoutProps) {
   const [headerNotice, setHeaderNotice] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [projectSidebarWidth, setProjectSidebarWidth] = useState(storedSidebarWidth);
+  const [projectSidebarCollapsed, setProjectSidebarCollapsed] = useState(storedSidebarCollapsed);
+  const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
   const { t } = useLanguage();
+  const showProjectSidebar = activeSection !== "projects";
+
+  useEffect(() => {
+    window.localStorage?.setItem?.(SIDEBAR_WIDTH_KEY, String(projectSidebarWidth));
+  }, [projectSidebarWidth]);
+
+  useEffect(() => {
+    window.localStorage?.setItem?.(SIDEBAR_COLLAPSED_KEY, String(projectSidebarCollapsed));
+  }, [projectSidebarCollapsed]);
+
+  useEffect(() => {
+    if (!showProjectSidebar) return undefined;
+
+    function handlePointerMove(event: globalThis.PointerEvent) {
+      const resizeStart = resizeStartRef.current;
+      if (!resizeStart) return;
+      const nextWidth = resizeStart.width + event.clientX - resizeStart.pointerX;
+      if (nextWidth <= COLLAPSE_SIDEBAR_WIDTH) {
+        setProjectSidebarCollapsed(true);
+        return;
+      }
+      setProjectSidebarCollapsed(false);
+      setProjectSidebarWidth(clampSidebarWidth(nextWidth));
+    }
+
+    function handlePointerUp() {
+      resizeStartRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [showProjectSidebar]);
+
+  function startProjectSidebarResize(event: PointerEvent<HTMLButtonElement>, startWidth?: number) {
+    resizeStartRef.current = {
+      pointerX: event.clientX,
+      width: startWidth ?? projectSidebarWidth,
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
 
   return (
     <div className="app-shell">
@@ -34,7 +351,7 @@ export function Layout({
             <button
               aria-label="VisionOps"
               className="brand brand--header"
-              onClick={onOpenProjects}
+              onClick={() => onNavigate("projects")}
               title="VisionOps"
               type="button"
             >
@@ -45,21 +362,31 @@ export function Layout({
                 <span className="brand__name">VisionOps</span>
               </span>
             </button>
+            <nav className="top-nav" aria-label={t("nav.primary")}>
+              {navItems.map((item) => {
+                const Icon = item.icon;
+                const label = t(item.labelKey);
+                return (
+                  <button
+                    aria-current={activeSection === item.key ? "page" : undefined}
+                    aria-label={label}
+                    className="top-nav__button"
+                    data-active={activeSection === item.key ? "true" : undefined}
+                    key={item.key}
+                    onClick={() => onNavigate(item.key)}
+                    type="button"
+                  >
+                    <Icon aria-hidden="true" size={16} />
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
+            </nav>
             <div className="header-title">
               <h1>{title}</h1>
             </div>
           </div>
           <div className="header-actions">
-            <button
-              className="icon-button"
-              data-active={currentView === "projects" ? "true" : undefined}
-              aria-label={t("nav.projects")}
-              onClick={onOpenProjects}
-              title={t("nav.projects")}
-              type="button"
-            >
-              <FolderKanban aria-hidden="true" size={18} />
-            </button>
             <button
               className="icon-button"
               aria-label={t("header.search")}
@@ -130,9 +457,55 @@ export function Layout({
           ) : null}
         </header>
 
-        <main className="dashboard" aria-label={t("app.workspace")}>
-          {children}
-        </main>
+        <div
+          className="workspace-body"
+          data-has-sidebar={showProjectSidebar ? "true" : undefined}
+          data-sidebar-collapsed={
+            showProjectSidebar && projectSidebarCollapsed ? "true" : undefined
+          }
+          style={
+            showProjectSidebar
+              ? ({ "--project-sidebar-width": `${projectSidebarWidth}px` } as CSSProperties)
+              : undefined
+          }
+        >
+          {showProjectSidebar && projectSidebarCollapsed ? (
+            <aside className="project-sidebar-rail" aria-label={t("projectSidebar.label")}>
+              <button
+                aria-label={t("projectSidebar.resize")}
+                className="project-sidebar-rail__resize-handle"
+                onPointerDown={(event) => startProjectSidebarResize(event, RAIL_SIDEBAR_WIDTH)}
+                title={t("projectSidebar.resize")}
+                type="button"
+              />
+            </aside>
+          ) : null}
+          {showProjectSidebar && !projectSidebarCollapsed ? (
+            <div className="project-sidebar-shell">
+              <ProjectSidebar
+                hiddenProjectIds={hiddenProjectIds}
+                onCreateProject={onCreateProject}
+                onProjectSortChange={onProjectSortChange}
+                onSelectProject={onSelectProject}
+                onToggleProjectHidden={onToggleProjectHidden}
+                projects={projects}
+                projectsLoading={projectsLoading}
+                projectSort={projectSort}
+                selectedProjectId={selectedProjectId}
+              />
+              <button
+                aria-label={t("projectSidebar.resize")}
+                className="project-sidebar__resize-handle"
+                onPointerDown={startProjectSidebarResize}
+                title={t("projectSidebar.resize")}
+                type="button"
+              />
+            </div>
+          ) : null}
+          <main className="dashboard" aria-label={t("app.workspace")}>
+            {children}
+          </main>
+        </div>
       </div>
     </div>
   );

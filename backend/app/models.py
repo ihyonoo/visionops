@@ -47,9 +47,11 @@ class DatasetSplit(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     train_ratio: Mapped[float] = mapped_column(Float, nullable=False)
     val_ratio: Mapped[float] = mapped_column(Float, nullable=False)
+    test_ratio: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     seed: Mapped[int] = mapped_column(Integer, nullable=False)
     train_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     val_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    test_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     split_path: Mapped[str] = mapped_column(Text, nullable=False)
     dataset_yaml_path: Mapped[str] = mapped_column(Text, nullable=False)
 
@@ -122,4 +124,3 @@ class InferencePrediction(TimestampMixin, Base):
     prediction_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     class_names: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     max_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-

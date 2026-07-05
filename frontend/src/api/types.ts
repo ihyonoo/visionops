@@ -45,9 +45,11 @@ export type DatasetSplit = {
   name: string;
   train_ratio: number;
   val_ratio: number;
+  test_ratio: number;
   seed: number;
   train_count: number;
   val_count: number;
+  test_count: number;
   split_path: string;
   dataset_yaml_path: string;
   created_at: Timestamp;
@@ -57,7 +59,12 @@ export type DatasetSplitCreate = {
   name: string;
   train_ratio: number;
   val_ratio: number;
+  test_ratio?: number;
   seed?: number;
+};
+
+export type DatasetSplitUpdate = {
+  name: string;
 };
 
 export type TrainingConfig = {
@@ -150,6 +157,11 @@ export type RuntimeInstallResult = {
 export type TrainingPreflight = {
   can_start: boolean;
   blocking_issues: string[];
+  command_preview?: {
+    argv: string[];
+    kind: string;
+    shell: string;
+  };
   warnings: string[];
   recommendations: string[];
   devices: RuntimeDevice[];
@@ -176,6 +188,13 @@ export type ModelArtifact = {
   metrics_snapshot: JsonObject;
   created_at: Timestamp;
   updated_at: Timestamp;
+};
+
+export type TrainingDownload = {
+  filename: string;
+  label: string;
+  kind: string;
+  url: string;
 };
 
 export type InferenceConfig = {

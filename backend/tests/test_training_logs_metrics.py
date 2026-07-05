@@ -293,6 +293,155 @@ def test_artifacts_endpoint_returns_best_and_last_artifacts(client, db, tmp_path
     assert body[0]["metrics_snapshot"] == {"best_mAP50": 0.7}
 
 
+def test_training_artifact_and_results_csv_downloads(client, db, tmp_path):
+    project, _dataset, split = _create_project_dataset_split(db, tmp_path)
+    artifact_dir = tmp_path / "artifacts" / "run-download"
+    artifact_dir.mkdir(parents=True)
+    best_path = artifact_dir / "best.pt"
+    last_path = artifact_dir / "last.pt"
+    best_path.write_bytes(b"best-weights")
+    last_path.write_bytes(b"last-weights")
+    (artifact_dir / "results.csv").write_text("epoch,mAP50\n1,0.7\n", encoding="utf-8")
+    (artifact_dir / "args.yaml").write_text("epochs: 2\n", encoding="utf-8")
+    (artifact_dir / "results.png").write_bytes(b"plot")
+    (artifact_dir / "confusion_matrix.png").write_bytes(b"matrix")
+    (artifact_dir / "train_batch0.jpg").write_bytes(b"train-sample")
+    (artifact_dir / "val_batch0_pred.jpg").write_bytes(b"val-sample")
+    run = _create_training_run(db, project, split, artifact_path=artifact_dir)
+    artifacts = [
+        ModelArtifact(
+            id="artifact-best",
+            training_run_id=run.id,
+            kind="best",
+            path=str(best_path),
+            metrics_snapshot={},
+        ),
+        ModelArtifact(
+            id="artifact-last",
+            training_run_id=run.id,
+            kind="last",
+            path=str(last_path),
+            metrics_snapshot={},
+        ),
+    ]
+    db.add_all(artifacts)
+    db.commit()
+
+    downloads_response = client.get(
+        f"/api/projects/{project.id}/training-runs/{run.id}/downloads"
+    )
+    artifact_response = client.get(
+        f"/api/projects/{project.id}/training-runs/{run.id}/artifacts/{artifacts[0].id}/download"
+    )
+    results_response = client.get(f"/api/projects/{project.id}/training-runs/{run.id}/results.csv")
+    args_response = client.get(f"/api/projects/{project.id}/training-runs/{run.id}/downloads/args.yaml")
+    plot_response = client.get(f"/api/projects/{project.id}/training-runs/{run.id}/downloads/results.png")
+    thumbnail_response = client.get(f"/api/projects/{project.id}/training-runs/{run.id}/thumbnail")
+
+    assert downloads_response.status_code == 200
+    downloads = downloads_response.json()
+    assert [item["filename"] for item in downloads] == [
+        "results.csv",
+        "best.pt",
+        "last.pt",
+        "args.yaml",
+        "confusion_matrix.png",
+        "results.png",
+    ]
+    assert "train_batch0.jpg" not in {item["filename"] for item in downloads}
+    assert "val_batch0_pred.jpg" not in {item["filename"] for item in downloads}
+    assert artifact_response.status_code == 200
+    assert artifact_response.content == b"best-weights"
+    assert "best.pt" in artifact_response.headers["content-disposition"]
+    assert results_response.status_code == 200
+    assert results_response.text == "epoch,mAP50\n1,0.7\n"
+    assert "results.csv" in results_response.headers["content-disposition"]
+    assert args_response.status_code == 200
+    assert args_response.text == "epochs: 2\n"
+    assert "args.yaml" in args_response.headers["content-disposition"]
+    assert plot_response.status_code == 200
+    assert plot_response.content == b"plot"
+    assert thumbnail_response.status_code == 200
+    assert thumbnail_response.content == b"val-sample"
+
+
+def test_training_downloads_use_logged_yolo_save_dir_when_artifact_path_was_relative(
+    client, db, tmp_path
+):
+    project, _dataset, split = _create_project_dataset_split(db, tmp_path)
+    recorded_dir = tmp_path / "recorded" / "run-legacy"
+    actual_dir = tmp_path / "runs" / "detect" / "recorded" / "run-legacy"
+    (recorded_dir / "weights").mkdir(parents=True)
+    (actual_dir / "weights").mkdir(parents=True)
+    (recorded_dir / "results.csv").write_text("epoch,mAP50\n1,0.7\n", encoding="utf-8")
+    (recorded_dir / "weights" / "best.pt").write_text("best", encoding="utf-8")
+    (recorded_dir / "weights" / "last.pt").write_text("last", encoding="utf-8")
+    (actual_dir / "results.csv").write_text("epoch,mAP50\n1,0.9\n", encoding="utf-8")
+    (actual_dir / "args.yaml").write_text("epochs: 30\n", encoding="utf-8")
+    (actual_dir / "results.png").write_bytes(b"plot")
+    log_path = recorded_dir / "logs" / "stdout.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(f"engine/trainer: save_dir={actual_dir}, epochs=30\n", encoding="utf-8")
+    run = _create_training_run(db, project, split, artifact_path=recorded_dir)
+    run.log_path = str(log_path)
+    db.commit()
+
+    downloads_response = client.get(
+        f"/api/projects/{project.id}/training-runs/{run.id}/downloads"
+    )
+    args_response = client.get(f"/api/projects/{project.id}/training-runs/{run.id}/downloads/args.yaml")
+    plot_response = client.get(f"/api/projects/{project.id}/training-runs/{run.id}/downloads/results.png")
+    results_response = client.get(f"/api/projects/{project.id}/training-runs/{run.id}/results.csv")
+
+    assert downloads_response.status_code == 200
+    assert [item["filename"] for item in downloads_response.json()] == [
+        "results.csv",
+        "args.yaml",
+        "results.png",
+    ]
+    assert args_response.status_code == 200
+    assert args_response.text == "epochs: 30\n"
+    assert plot_response.status_code == 200
+    assert plot_response.content == b"plot"
+    assert results_response.status_code == 200
+    assert results_response.text == "epoch,mAP50\n1,0.9\n"
+
+
+def test_training_downloads_use_results_saved_to_log_when_save_dir_is_absent(
+    client, db, tmp_path
+):
+    project, _dataset, split = _create_project_dataset_split(db, tmp_path)
+    recorded_dir = tmp_path / "recorded" / "run-with-results-log"
+    actual_dir = tmp_path / "runs" / "detect" / "recorded" / "run-with-results-log"
+    (recorded_dir / "weights").mkdir(parents=True)
+    actual_dir.mkdir(parents=True)
+    (recorded_dir / "results.csv").write_text("epoch,mAP50\n1,0.5\n", encoding="utf-8")
+    (actual_dir / "results.csv").write_text("epoch,mAP50\n1,0.95\n", encoding="utf-8")
+    (actual_dir / "args.yaml").write_text("epochs: 50\n", encoding="utf-8")
+    log_path = recorded_dir / "logs" / "stdout.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(f"Results saved to \x1b[1m{actual_dir}\x1b[0m\n", encoding="utf-8")
+    run = _create_training_run(db, project, split, artifact_path=recorded_dir)
+    run.log_path = str(log_path)
+    db.commit()
+
+    downloads_response = client.get(
+        f"/api/projects/{project.id}/training-runs/{run.id}/downloads"
+    )
+    args_response = client.get(f"/api/projects/{project.id}/training-runs/{run.id}/downloads/args.yaml")
+    results_response = client.get(f"/api/projects/{project.id}/training-runs/{run.id}/results.csv")
+
+    assert downloads_response.status_code == 200
+    assert [item["filename"] for item in downloads_response.json()] == [
+        "results.csv",
+        "args.yaml",
+    ]
+    assert args_response.status_code == 200
+    assert args_response.text == "epochs: 50\n"
+    assert results_response.status_code == 200
+    assert results_response.text == "epoch,mAP50\n1,0.95\n"
+
+
 def test_training_log_metrics_and_artifacts_reject_run_outside_project(
     client, db, tmp_path
 ):
@@ -304,7 +453,7 @@ def test_training_log_metrics_and_artifacts_reject_run_outside_project(
     )
     run = _create_training_run(db, other_project, other_split, run_id="outside-run")
 
-    for suffix in ("logs", "metrics", "artifacts"):
+    for suffix in ("logs", "metrics", "artifacts", "downloads"):
         response = client.get(
             f"/api/projects/{project.id}/training-runs/{run.id}/{suffix}"
         )

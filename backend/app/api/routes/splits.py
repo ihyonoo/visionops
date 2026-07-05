@@ -1,5 +1,4 @@
 import shutil
-import uuid
 from pathlib import Path
 from typing import Annotated
 
@@ -9,8 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import get_db
-from app.models import Dataset, DatasetSplit, Project
-from app.schemas import DatasetSplitCreate, DatasetSplitRead
+from app.models import Dataset, DatasetSplit, Project, TrainingRun
+from app.schemas import DatasetSplitCreate, DatasetSplitRead, DatasetSplitUpdate
+from app.services.ids import new_id
 from app.services.split import create_copy_split
 from app.services.storage import StoragePaths
 
@@ -35,8 +35,33 @@ def _require_dataset(db: Session, project_id: str, dataset_id: str) -> Dataset:
     return dataset
 
 
+def _require_split(db: Session, project_id: str, dataset_id: str, split_id: str) -> DatasetSplit:
+    _require_dataset(db, project_id, dataset_id)
+    split = db.get(DatasetSplit, split_id)
+    if split is None or split.dataset_id != dataset_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="split을 찾을 수 없습니다.")
+    return split
+
+
 def _remove_split_root(split_root: Path) -> None:
     shutil.rmtree(split_root, ignore_errors=True)
+
+
+def _is_managed_split_path(path: Path, project_id: str, dataset_id: str) -> bool:
+    try:
+        resolved_path = path.resolve()
+        managed_root = (
+            StoragePaths(settings.artifact_root)
+            .ensure_root()
+            / "projects"
+            / project_id
+            / "datasets"
+            / dataset_id
+            / "splits"
+        ).resolve()
+    except OSError:
+        return False
+    return managed_root in resolved_path.parents
 
 
 @router.post("", response_model=DatasetSplitRead, status_code=status.HTTP_201_CREATED)
@@ -46,25 +71,24 @@ def create_split(
     payload: DatasetSplitCreate,
     db: Annotated[Session, Depends(get_db)],
 ) -> DatasetSplit:
-    if not 0 <= payload.train_ratio <= 1 or not 0 <= payload.val_ratio <= 1:
+    if (
+        not 0 <= payload.train_ratio <= 1
+        or not 0 <= payload.val_ratio <= 1
+        or not 0 <= payload.test_ratio <= 1
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="train_ratio와 val_ratio는 0과 1 사이여야 합니다.",
+            detail="train_ratio, val_ratio, test_ratio는 0과 1 사이여야 합니다.",
         )
-    if abs((payload.train_ratio + payload.val_ratio) - 1.0) > 1e-6:
+    if abs((payload.train_ratio + payload.val_ratio + payload.test_ratio) - 1.0) > 1e-6:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="train_ratio와 val_ratio의 합은 1.0이어야 합니다.",
+            detail="train_ratio, val_ratio, test_ratio의 합은 1.0이어야 합니다.",
         )
 
     dataset = _require_dataset(db, project_id, dataset_id)
-    if dataset.validation_status != "valid":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="유효한 데이터셋만 split을 생성할 수 있습니다.",
-        )
 
-    split_id = uuid.uuid4().hex
+    split_id = new_id("spl")
     split_root = StoragePaths(settings.artifact_root).split_dir(project_id, dataset_id, split_id)
     try:
         split_result = create_copy_split(
@@ -72,6 +96,7 @@ def create_split(
             split_root=split_root,
             train_ratio=payload.train_ratio,
             val_ratio=payload.val_ratio,
+            test_ratio=payload.test_ratio,
             seed=payload.seed,
         )
     except (OSError, ValueError) as exc:
@@ -87,9 +112,11 @@ def create_split(
         name=payload.name,
         train_ratio=payload.train_ratio,
         val_ratio=payload.val_ratio,
+        test_ratio=payload.test_ratio,
         seed=payload.seed,
         train_count=split_result.train_count,
         val_count=split_result.val_count,
+        test_count=split_result.test_count,
         split_path=str(split_root),
         dataset_yaml_path=str(split_result.dataset_yaml_path),
     )
@@ -120,3 +147,41 @@ def list_splits(
         .order_by(DatasetSplit.created_at.desc())
     )
     return list(db.scalars(statement))
+
+
+@router.patch("/{split_id}", response_model=DatasetSplitRead)
+def update_split(
+    project_id: str,
+    dataset_id: str,
+    split_id: str,
+    payload: DatasetSplitUpdate,
+    db: Annotated[Session, Depends(get_db)],
+) -> DatasetSplit:
+    split = _require_split(db, project_id, dataset_id, split_id)
+    split.name = payload.name
+    db.add(split)
+    db.commit()
+    db.refresh(split)
+    return split
+
+
+@router.delete("/{split_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_split(
+    project_id: str,
+    dataset_id: str,
+    split_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    split = _require_split(db, project_id, dataset_id, split_id)
+    training_run = db.scalar(select(TrainingRun.id).where(TrainingRun.split_id == split_id))
+    if training_run is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="학습 실행에 연결된 split은 삭제할 수 없습니다.",
+        )
+
+    split_path = Path(split.split_path)
+    db.delete(split)
+    db.commit()
+    if _is_managed_split_path(split_path, project_id, dataset_id):
+        _remove_split_root(split_path)

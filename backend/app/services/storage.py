@@ -7,8 +7,9 @@ class StoragePaths:
     root: Path
 
     def ensure_root(self) -> Path:
-        self.root.mkdir(parents=True, exist_ok=True)
-        return self.root
+        root = self.root.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     def project_dir(self, project_id: str) -> Path:
         path = self.ensure_root() / "projects" / project_id

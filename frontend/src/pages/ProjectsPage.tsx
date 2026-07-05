@@ -273,7 +273,6 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
             <form className="modal-form" onSubmit={handleCreateSubmit}>
               <div className="panel__header">
                 <div>
-                  <p className="section-label">{t("projects.create")}</p>
                   <h2 id="project-create-title">{t("projects.new")}</h2>
                 </div>
                 <button
@@ -349,7 +348,6 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
             <form className="modal-form" onSubmit={handleEditSubmit}>
               <div className="panel__header">
                 <div>
-                  <p className="section-label">{t("projects.rename")}</p>
                   <h2 id="project-edit-title">{editingProject.name}</h2>
                 </div>
                 <button
@@ -425,7 +423,6 @@ export function ProjectsPage({ onProjectDeleted, onSelectProject, selectedProjec
             <div className="modal-form">
               <div className="panel__header">
                 <div>
-                  <p className="section-label">{t("projects.delete")}</p>
                   <h2 id="project-delete-title">{deletingProject.name}</h2>
                 </div>
                 <button
