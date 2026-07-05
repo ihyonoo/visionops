@@ -313,6 +313,10 @@ type ArtifactOption = {
   run: TrainingRun;
 };
 
+type DatasetCreatePayload =
+  | { kind: "classification"; body: { name: string; source_path: string } }
+  | { kind: "detection"; body: FormData };
+
 type UploadFileWithPath = File & {
   webkitRelativePath?: string;
 };
@@ -682,6 +686,7 @@ export function ProjectDetailPage({
   const previousInferenceStatusesRef = useRef<Map<string, string>>(new Map());
   const [datasetDialogOpen, setDatasetDialogOpen] = useState(false);
   const [datasetName, setDatasetName] = useState("");
+  const [classificationDatasetSourcePath, setClassificationDatasetSourcePath] = useState("");
   const [datasetEditName, setDatasetEditName] = useState("");
   const [editingDataset, setEditingDataset] = useState<Dataset | null>(null);
   const [deletingDataset, setDeletingDataset] = useState<Dataset | null>(null);
@@ -761,11 +766,14 @@ export function ProjectDetailPage({
   const datasets = datasetsQuery.data ?? [];
 
   const createDataset = useMutation({
-    mutationFn: (body: FormData) =>
-      apiPost<Dataset>(`/api/projects/${projectId}/datasets/upload`, body),
+    mutationFn: (payload: DatasetCreatePayload) =>
+      payload.kind === "classification"
+        ? apiPost<Dataset>(`/api/projects/${projectId}/datasets`, payload.body)
+        : apiPost<Dataset>(`/api/projects/${projectId}/datasets/upload`, payload.body),
     onSuccess: (dataset) => {
       setDatasetDialogOpen(false);
       setDatasetName("");
+      setClassificationDatasetSourcePath("");
       setImageFiles([]);
       setLabelFiles([]);
       setDataYamlFiles([]);
@@ -1168,6 +1176,7 @@ export function ProjectDetailPage({
     if (createDataset.isPending) return;
     setDatasetDialogOpen(false);
     setDatasetName("");
+    setClassificationDatasetSourcePath("");
     setImageFiles([]);
     setLabelFiles([]);
     setDataYamlFiles([]);
@@ -1203,6 +1212,19 @@ export function ProjectDetailPage({
   function handleDatasetSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedName = datasetName.trim();
+    const trimmedSourcePath = classificationDatasetSourcePath.trim();
+    if (isClassificationProject) {
+      if (!trimmedName || !trimmedSourcePath || createDataset.isPending) return;
+      createDataset.mutate({
+        kind: "classification",
+        body: {
+          name: trimmedName,
+          source_path: trimmedSourcePath,
+        },
+      });
+      return;
+    }
+
     const dataYamlFile = dataYamlFiles[0];
     if (
       !trimmedName ||
@@ -1219,7 +1241,7 @@ export function ProjectDetailPage({
     appendFiles(formData, "images", imageFiles);
     appendFiles(formData, "labels", labelFiles);
     formData.append("data_yaml", dataYamlFile, dataYamlFile.name);
-    createDataset.mutate(formData);
+    createDataset.mutate({ kind: "detection", body: formData });
   }
 
   function handleDatasetEditSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1769,34 +1791,51 @@ export function ProjectDetailPage({
                       value={datasetName}
                     />
                   </label>
-                  <DatasetUploadPicker
-                    accept=".jpg,.jpeg,.png,.bmp,.webp"
-                    description={t("dataset.imageFolderDescription")}
-                    files={imageFiles}
-                    inputLabel={t("dataset.imageFolderSelect")}
-                    kind="images"
-                    onFilesChange={setImageFiles}
-                    title={t("dataset.imageFolder")}
-                  />
-                  <DatasetUploadPicker
-                    accept=".txt"
-                    description={t("dataset.labelFolderDescription")}
-                    files={labelFiles}
-                    inputLabel={t("dataset.labelFolderSelect")}
-                    kind="labels"
-                    onFilesChange={setLabelFiles}
-                    title={t("dataset.labelFolder")}
-                  />
-                  <DatasetUploadPicker
-                    accept=".yaml,.yml"
-                    description={t("dataset.yamlDescription")}
-                    files={dataYamlFiles}
-                    inputLabel="data.yaml"
-                    kind="data_yaml"
-                    multiple={false}
-                    onFilesChange={setDataYamlFiles}
-                    title="data.yaml"
-                  />
+                  {isClassificationProject ? (
+                    <label className="field">
+                      <span>{t("dataset.sourcePath")}</span>
+                      <input
+                        aria-label={t("dataset.sourcePath")}
+                        onChange={(event) => setClassificationDatasetSourcePath(event.target.value)}
+                        placeholder={t("dataset.classificationFormat")}
+                        required
+                        type="text"
+                        value={classificationDatasetSourcePath}
+                      />
+                      <small>{t("dataset.classificationFormat")}</small>
+                    </label>
+                  ) : (
+                    <>
+                      <DatasetUploadPicker
+                        accept=".jpg,.jpeg,.png,.bmp,.webp"
+                        description={t("dataset.imageFolderDescription")}
+                        files={imageFiles}
+                        inputLabel={t("dataset.imageFolderSelect")}
+                        kind="images"
+                        onFilesChange={setImageFiles}
+                        title={t("dataset.imageFolder")}
+                      />
+                      <DatasetUploadPicker
+                        accept=".txt"
+                        description={t("dataset.labelFolderDescription")}
+                        files={labelFiles}
+                        inputLabel={t("dataset.labelFolderSelect")}
+                        kind="labels"
+                        onFilesChange={setLabelFiles}
+                        title={t("dataset.labelFolder")}
+                      />
+                      <DatasetUploadPicker
+                        accept=".yaml,.yml"
+                        description={t("dataset.yamlDescription")}
+                        files={dataYamlFiles}
+                        inputLabel="data.yaml"
+                        kind="data_yaml"
+                        multiple={false}
+                        onFilesChange={setDataYamlFiles}
+                        title="data.yaml"
+                      />
+                    </>
+                  )}
                   {createDataset.isError ? (
                     <div className="notice notice--danger" role="alert">
                       {createDataset.error instanceof Error
@@ -1816,11 +1855,13 @@ export function ProjectDetailPage({
                     <button
                       className="primary-button"
                       disabled={
+                        createDataset.isPending ||
                         !datasetName.trim() ||
-                        imageFiles.length === 0 ||
-                        labelFiles.length === 0 ||
-                        dataYamlFiles.length === 0 ||
-                        createDataset.isPending
+                        (isClassificationProject
+                          ? !classificationDatasetSourcePath.trim()
+                          : imageFiles.length === 0 ||
+                            labelFiles.length === 0 ||
+                            dataYamlFiles.length === 0)
                       }
                       type="submit"
                     >

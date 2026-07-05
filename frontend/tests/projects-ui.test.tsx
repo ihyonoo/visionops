@@ -2666,6 +2666,141 @@ describe("ProjectDetailPage", () => {
     container.remove();
   });
 
+  it("registers classification datasets with a source path JSON payload", async () => {
+    const existingDataset = {
+      class_names: ["ok", "ng"],
+      created_at: "2026-07-02T00:00:00Z",
+      format: "folder",
+      id: "dataset-old",
+      image_count: 4,
+      label_count: 0,
+      name: "기존 분류 데이터셋",
+      project_id: "project-1",
+      source_path: "/data/old",
+      validation_status: "valid",
+      validation_summary: { errors: [], warnings: [] },
+    };
+    const newDataset = {
+      ...existingDataset,
+      id: "dataset-new",
+      name: "분류 데이터셋",
+      source_path: "/data/classification",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/projects/project-1")) {
+        return new Response(
+          JSON.stringify({
+            created_at: "2026-07-01T00:00:00Z",
+            description: "",
+            id: "project-1",
+            name: "분류 프로젝트",
+            task_type: "classification",
+            updated_at: "2026-07-02T00:00:00Z",
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 },
+        );
+      }
+      if (url.endsWith("/api/projects/project-1/datasets") && init?.method === "POST") {
+        expect(init.body).not.toBeInstanceOf(FormData);
+        expect(JSON.parse(String(init.body))).toEqual({
+          name: "분류 데이터셋",
+          source_path: "/data/classification",
+        });
+        return new Response(JSON.stringify(newDataset), {
+          headers: { "Content-Type": "application/json" },
+          status: 201,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/upload") && init?.method === "POST") {
+        throw new Error("classification dataset registration must not use multipart upload");
+      }
+      if (url.endsWith("/api/projects/project-1/datasets")) {
+        return new Response(JSON.stringify([existingDataset]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-old")) {
+        return new Response(JSON.stringify(existingDataset), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/projects/project-1/datasets/dataset-new")) {
+        return new Response(JSON.stringify(newDataset), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      if (url.includes("/splits")) {
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { container, root } = renderWithQuery(
+      <ProjectDetailPage activeTab="datasets" onTabChange={vi.fn()} projectId="project-1" />,
+    );
+
+    await waitForAssertion(() => {
+      expect(container.textContent).toContain("기존 분류 데이터셋");
+    });
+
+    act(() => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("데이터셋 등록"))
+        ?.click();
+    });
+
+    const dialog = container.querySelector<HTMLElement>("[role='dialog']");
+    expect(dialog?.textContent).toContain("train/class_name 또는 class_name 폴더 구조");
+    expect(dialog?.querySelector("[aria-label='이미지 폴더 선택']")).toBeNull();
+    expect(dialog?.querySelector("[aria-label='라벨 폴더 선택']")).toBeNull();
+    expect(dialog?.querySelector("[aria-label='data.yaml']")).toBeNull();
+
+    const datasetNameInput = dialog?.querySelector<HTMLInputElement>(
+      "input[placeholder='데이터셋 이름을 입력하세요']",
+    );
+    const sourcePathInput = dialog?.querySelector<HTMLInputElement>(
+      "input[aria-label='데이터셋 경로']",
+    );
+    const datasetForm = datasetNameInput?.closest("form");
+
+    act(() => {
+      setInputValue(datasetNameInput!, "분류 데이터셋");
+      setInputValue(sourcePathInput!, "/data/classification");
+    });
+
+    act(() => {
+      if (datasetForm) Simulate.submit(datasetForm);
+    });
+
+    await waitForAssertion(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith("/api/projects/project-1/datasets") && init?.method === "POST",
+        ),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith("/api/projects/project-1/datasets/upload") &&
+            init?.method === "POST",
+        ),
+      ).toBe(false);
+      expect(container.querySelector("[role='dialog']")).toBeNull();
+      expect(container.textContent).toContain("분류 데이터셋");
+    });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
   it("requires choosing a split before opening the training modal", async () => {
     vi.stubGlobal(
       "fetch",
