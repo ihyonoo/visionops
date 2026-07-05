@@ -110,14 +110,23 @@ def create_split(
             detail="train_ratio, val_ratio, test_ratio의 합은 1.0이어야 합니다.",
         )
 
-    dataset = _require_dataset(db, project_id, dataset_id)
+    project = _require_project(db, project_id)
+    dataset = db.get(Dataset, dataset_id)
+    if dataset is None or dataset.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
 
     split_id = new_id("spl")
     split_root = StoragePaths(settings.artifact_root).split_dir(project_id, dataset_id, split_id)
-    is_classification = dataset.format == "yolo-classification"
+    is_classification_project = project.task_type == "classification"
+    is_classification_dataset = dataset.format == "yolo-classification"
+    if is_classification_project != is_classification_dataset:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="프로젝트 task와 데이터셋 형식이 일치하지 않습니다.",
+        )
     split_function = (
         create_classification_copy_split
-        if is_classification
+        if is_classification_project
         else create_copy_split
     )
     try:
@@ -130,7 +139,7 @@ def create_split(
             seed=payload.seed,
         )
         dataset_yaml_path = split_result.dataset_yaml_path
-        if is_classification:
+        if is_classification_project:
             dataset_yaml_path = _write_classification_dataset_yaml(
                 split_root=split_root,
                 dataset=dataset,

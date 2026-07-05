@@ -102,7 +102,7 @@ def test_create_classification_split_uses_class_folder_layout(client, tmp_path):
             name="분류",
             slug="classification",
             description="",
-            task_type="detection",
+            task_type="classification",
         )
         db.add(project)
         dataset_root = tmp_path / "cls"
@@ -152,6 +152,45 @@ def test_create_classification_split_uses_class_folder_layout(client, tmp_path):
         "names": ["ng", "ok"],
     }
     assert (Path(body["split_path"]) / "train" / "ok").is_dir()
+
+
+def test_create_split_rejects_project_dataset_task_mismatch(client, tmp_path):
+    with SessionLocal() as db:
+        project = Project(
+            id="project-mismatch",
+            name="검출",
+            slug="detection",
+            description="",
+            task_type="detection",
+        )
+        db.add(project)
+        dataset_root = tmp_path / "cls"
+        for class_name in ("ok", "ng"):
+            class_dir = dataset_root / class_name
+            class_dir.mkdir(parents=True)
+            Image.new("RGB", (16, 16), color="white").save(class_dir / f"{class_name}.jpg")
+        dataset = Dataset(
+            id="dataset-mismatch",
+            project_id=project.id,
+            name="cls",
+            source_path=str(dataset_root),
+            format="yolo-classification",
+            class_names=["ng", "ok"],
+            image_count=2,
+            label_count=0,
+            validation_status="valid",
+            validation_summary={},
+        )
+        db.add(dataset)
+        db.commit()
+
+    response = client.post(
+        "/api/projects/project-mismatch/datasets/dataset-mismatch/splits",
+        json={"name": "split", "train_ratio": 0.5, "val_ratio": 0.5, "test_ratio": 0, "seed": 3},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "프로젝트 task와 데이터셋 형식이 일치하지 않습니다."
 
 
 def test_update_split_name(client, tmp_path):
