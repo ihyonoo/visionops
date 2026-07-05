@@ -177,3 +177,4 @@ def test_metrics_parser_summarizes_classification_accuracy(tmp_path):
     assert summary["best_accuracy_top1"] == 0.82
     assert summary["best_accuracy_top5"] == 0.96
     assert summary["last_val_loss"] == 0.7
+    assert summary["last_train_loss"] == 0.8
