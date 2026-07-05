@@ -1,8 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
-import { Box, Clock3, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Box, Clock3, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiGet, apiUrl } from "../api/client";
+import { ACTIVE_WORK_REFETCH_MS, isActiveWorkStatus, isTerminalWorkStatus } from "../api/realtime";
 import type { JsonObject, ModelArtifact, TrainingDownload, TrainingMetrics, TrainingRun } from "../api/types";
 import { LogViewer } from "../components/LogViewer";
 import { MetricChart } from "../components/MetricChart";
@@ -11,6 +12,7 @@ import { useLanguage, type Language } from "../i18n/LanguageProvider";
 
 type TrainingRunPageProps = {
   initialRun?: TrainingRun | null;
+  onBackToList?: () => void;
   projectId: string;
   runId: string | null;
 };
@@ -175,21 +177,29 @@ function fallbackDownloads(projectId: string, run: TrainingRun, artifacts: Model
   ];
 }
 
-export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPageProps) {
+export function TrainingRunPage({ initialRun, onBackToList, projectId, runId }: TrainingRunPageProps) {
   const { language, t } = useLanguage();
+  const queryClient = useQueryClient();
+  const previousStatusRef = useRef<string | null>(initialRun?.status ?? null);
   const [selectedReportImage, setSelectedReportImage] = useState<TrainingDownload | null>(null);
   const runQuery = useQuery({
     enabled: Boolean(runId),
     initialData: initialRun ?? undefined,
     queryFn: () => apiGet<TrainingRun>(`/api/projects/${projectId}/training-runs/${runId as string}`),
     queryKey: ["projects", projectId, "training-runs", runId],
+    refetchInterval: (query) =>
+      isActiveWorkStatus(query.state.data?.status ?? initialRun?.status)
+        ? ACTIVE_WORK_REFETCH_MS
+        : false,
   });
+  const currentRunStatus = runQuery.data?.status ?? initialRun?.status;
 
   const metricsQuery = useQuery({
     enabled: Boolean(runId),
     queryFn: () =>
       apiGet<TrainingMetrics>(`/api/projects/${projectId}/training-runs/${runId as string}/metrics`),
     queryKey: ["projects", projectId, "training-runs", runId, "metrics"],
+    refetchInterval: isActiveWorkStatus(currentRunStatus) ? ACTIVE_WORK_REFETCH_MS : false,
   });
 
   const downloadsQuery = useQuery({
@@ -199,6 +209,7 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
         `/api/projects/${projectId}/training-runs/${runId as string}/downloads`,
       ),
     queryKey: ["projects", projectId, "training-runs", runId, "downloads"],
+    refetchInterval: isActiveWorkStatus(currentRunStatus) ? ACTIVE_WORK_REFETCH_MS : false,
   });
 
   const artifactsQuery = useQuery({
@@ -208,6 +219,7 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
         `/api/projects/${projectId}/training-runs/${runId as string}/artifacts`,
       ),
     queryKey: ["projects", projectId, "training-runs", runId, "artifacts"],
+    refetchInterval: isActiveWorkStatus(currentRunStatus) ? ACTIVE_WORK_REFETCH_MS : false,
   });
 
   const run = runQuery.data ?? initialRun ?? null;
@@ -235,6 +247,33 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
       ),
     [rows],
   );
+
+  useEffect(() => {
+    previousStatusRef.current = initialRun?.status?.trim().toLowerCase() ?? null;
+  }, [projectId, runId]);
+
+  useEffect(() => {
+    if (!runId || !currentRunStatus) return;
+    const previousStatus = previousStatusRef.current;
+    const normalizedStatus = currentRunStatus.trim().toLowerCase();
+    if (
+      previousStatus &&
+      isActiveWorkStatus(previousStatus) &&
+      isTerminalWorkStatus(normalizedStatus)
+    ) {
+      queryClient.invalidateQueries({ queryKey: ["projects", projectId, "training-runs", runId] });
+      queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "training-runs", runId, "metrics"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "training-runs", runId, "downloads"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "training-runs", runId, "artifacts"],
+      });
+    }
+    previousStatusRef.current = normalizedStatus;
+  }, [currentRunStatus, projectId, queryClient, runId]);
 
   useEffect(() => {
     if (!selectedReportImage) return undefined;
@@ -270,7 +309,15 @@ export function TrainingRunPage({ initialRun, projectId, runId }: TrainingRunPag
         <div>
           <h2>{run.name}</h2>
         </div>
-        <StatusBadge status={run.status} />
+        <div className="panel__actions training-detail__header-actions">
+          {onBackToList ? (
+            <button className="secondary-button" onClick={onBackToList} type="button">
+              <ArrowLeft aria-hidden="true" size={16} />
+              <span>{t("trainingManagement.backToList")}</span>
+            </button>
+          ) : null}
+          <StatusBadge status={run.status} />
+        </div>
         <div className="training-detail__meta">
           <span className="training-detail__model">
             <Box aria-hidden="true" size={15} />

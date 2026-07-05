@@ -4,6 +4,7 @@ export type Timestamp = string;
 export type Project = {
   id: string;
   name: string;
+  slug?: string;
   description: string;
   task_type: "detection" | string;
   created_at: Timestamp;

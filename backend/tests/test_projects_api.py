@@ -52,6 +52,39 @@ def test_create_list_and_get_project(client):
     assert fetched.json()["id"] == body["id"]
 
 
+def test_project_slug_is_generated_from_name_and_kept_unique(client):
+    first = client.post(
+        "/api/projects",
+        json={"name": "Suitcase Inspection", "description": ""},
+    )
+    second = client.post(
+        "/api/projects",
+        json={"name": "Suitcase Inspection", "description": ""},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["slug"] == "suitcase-inspection"
+    assert second.json()["slug"] == "suitcase-inspection-2"
+
+
+def test_project_slug_updates_when_project_is_renamed(client):
+    created = client.post(
+        "/api/projects",
+        json={"name": "Factory A", "description": ""},
+    )
+    assert created.status_code == 201
+    project_id = created.json()["id"]
+
+    response = client.patch(
+        f"/api/projects/{project_id}",
+        json={"name": "검수 라인 A"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["slug"] == "검수-라인-a"
+
+
 def test_missing_project_returns_404(client):
     response = client.get("/api/projects/missing")
 

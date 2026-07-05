@@ -1,6 +1,8 @@
 from pathlib import Path
+import re
 import shutil
 from typing import Annotated
+import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -27,6 +29,29 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 
 
+def project_slug_from_name(name: str) -> str:
+    normalized = unicodedata.normalize("NFKC", name).strip().lower()
+    slug = re.sub(r"[^\w\s-]", "", normalized, flags=re.UNICODE)
+    slug = re.sub(r"[\s_]+", "-", slug, flags=re.UNICODE)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug or "project"
+
+
+def unique_project_slug(db: Session, name: str, exclude_project_id: str | None = None) -> str:
+    base_slug = project_slug_from_name(name)
+    query = select(Project.slug)
+    if exclude_project_id is not None:
+        query = query.where(Project.id != exclude_project_id)
+    existing_slugs = {slug for slug in db.scalars(query) if slug}
+    if base_slug not in existing_slugs:
+        return base_slug
+
+    suffix = 2
+    while f"{base_slug}-{suffix}" in existing_slugs:
+        suffix += 1
+    return f"{base_slug}-{suffix}"
+
+
 def _first_dataset_image(dataset: Dataset) -> Path | None:
     images_root = Path(dataset.source_path) / "images"
     if not images_root.is_dir():
@@ -42,6 +67,7 @@ def create_project(payload: ProjectCreate, db: Annotated[Session, Depends(get_db
     project = Project(
         id=new_id("prj"),
         name=payload.name,
+        slug=unique_project_slug(db, payload.name),
         description=payload.description,
         task_type="detection",
     )
@@ -83,6 +109,7 @@ def update_project(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if payload.name is not None:
         project.name = payload.name
+        project.slug = unique_project_slug(db, payload.name, exclude_project_id=project.id)
     if payload.description is not None:
         project.description = payload.description
     db.add(project)

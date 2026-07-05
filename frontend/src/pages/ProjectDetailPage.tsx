@@ -2,7 +2,6 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import {
   ChevronDown,
   ChevronUp,
-  CheckCircle2,
   Database,
   GitBranch,
   Info,
@@ -26,6 +25,12 @@ import {
 } from "react";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiUrl } from "../api/client";
+import {
+  isActiveWorkStatus,
+  isTerminalWorkStatus,
+  shouldRefetchPredictionResults,
+  workRunsQueryRefetchInterval,
+} from "../api/realtime";
 import { LogViewer } from "../components/LogViewer";
 import { StatusBadge } from "../components/StatusBadge";
 import { useLanguage, type Language, type TranslationFunction } from "../i18n/LanguageProvider";
@@ -49,6 +54,7 @@ export type DetailTab = "datasets" | "training" | "inference";
 
 type ProjectDetailPageProps = {
   activeTab: DetailTab;
+  focusedInferenceRunId?: string | null;
   onTabChange: (tab: DetailTab) => void;
   projectId: string;
 };
@@ -84,6 +90,7 @@ const defaultTrainingConfig = {
 
 type TrainingConfigState = typeof defaultTrainingConfig;
 type TrainingPresetKey = "balanced" | "fast" | "cpu" | "accuracy";
+type TrainingModelGroup = "YOLO26" | "YOLO12" | "YOLO11" | "YOLOv10" | "YOLOv9" | "YOLOv8";
 type TrainingNumberConfigKey =
   | "epochs"
   | "batch"
@@ -106,6 +113,99 @@ type TrainingNumberConfigKey =
   | "scale"
   | "fliplr";
 type TrainingBooleanConfigKey = "cos_lr" | "cache" | "deterministic" | "amp";
+
+const trainingModelSizeConfig: Record<string, Partial<TrainingConfigState>> = {
+  t: { batch: 16, epochs: 50, imgsz: 640 },
+  n: { batch: 16, epochs: 50, imgsz: 640 },
+  s: { batch: 16, epochs: 60, imgsz: 640 },
+  m: { batch: 8, epochs: 80, imgsz: 640 },
+  b: { batch: 8, epochs: 80, imgsz: 640 },
+  c: { batch: 6, epochs: 100, imgsz: 640 },
+  l: { batch: 6, epochs: 100, imgsz: 640 },
+  e: { batch: 4, epochs: 100, imgsz: 640 },
+  x: { batch: 4, epochs: 100, imgsz: 640 },
+};
+
+function trainingModelOption(value: string, size: string, label: string) {
+  return {
+    value,
+    label: `${value} · ${label}`,
+    config: trainingModelSizeConfig[size],
+  };
+}
+
+const trainingModelGroups: Array<{
+  group: TrainingModelGroup;
+  options: Array<{
+    value: string;
+    label: string;
+    config: Partial<TrainingConfigState>;
+  }>;
+}> = [
+  {
+    group: "YOLO26",
+    options: [
+      trainingModelOption("yolo26n", "n", "nano"),
+      trainingModelOption("yolo26s", "s", "small"),
+      trainingModelOption("yolo26m", "m", "medium"),
+      trainingModelOption("yolo26l", "l", "large"),
+      trainingModelOption("yolo26x", "x", "xlarge"),
+    ],
+  },
+  {
+    group: "YOLO12",
+    options: [
+      trainingModelOption("yolo12n", "n", "nano"),
+      trainingModelOption("yolo12s", "s", "small"),
+      trainingModelOption("yolo12m", "m", "medium"),
+      trainingModelOption("yolo12l", "l", "large"),
+      trainingModelOption("yolo12x", "x", "xlarge"),
+    ],
+  },
+  {
+    group: "YOLO11",
+    options: [
+      trainingModelOption("yolo11n", "n", "nano"),
+      trainingModelOption("yolo11s", "s", "small"),
+      trainingModelOption("yolo11m", "m", "medium"),
+      trainingModelOption("yolo11l", "l", "large"),
+      trainingModelOption("yolo11x", "x", "xlarge"),
+    ],
+  },
+  {
+    group: "YOLOv10",
+    options: [
+      trainingModelOption("yolov10n", "n", "nano"),
+      trainingModelOption("yolov10s", "s", "small"),
+      trainingModelOption("yolov10m", "m", "medium"),
+      trainingModelOption("yolov10b", "b", "balanced"),
+      trainingModelOption("yolov10l", "l", "large"),
+      trainingModelOption("yolov10x", "x", "xlarge"),
+    ],
+  },
+  {
+    group: "YOLOv9",
+    options: [
+      trainingModelOption("yolov9t", "t", "tiny"),
+      trainingModelOption("yolov9s", "s", "small"),
+      trainingModelOption("yolov9m", "m", "medium"),
+      trainingModelOption("yolov9c", "c", "compact"),
+      trainingModelOption("yolov9e", "e", "extended"),
+    ],
+  },
+  {
+    group: "YOLOv8",
+    options: [
+      trainingModelOption("yolov8n", "n", "nano"),
+      trainingModelOption("yolov8s", "s", "small"),
+      trainingModelOption("yolov8m", "m", "medium"),
+      trainingModelOption("yolov8l", "l", "large"),
+      trainingModelOption("yolov8x", "x", "xlarge"),
+    ],
+  },
+];
+
+const trainingModelOptions = trainingModelGroups.flatMap((group) => group.options);
 
 const trainingPresetOptions: Array<{
   key: TrainingPresetKey;
@@ -556,9 +656,15 @@ function FieldLabel({ label, help }: { label: string; help: string }) {
   );
 }
 
-export function ProjectDetailPage({ activeTab, onTabChange, projectId }: ProjectDetailPageProps) {
+export function ProjectDetailPage({
+  activeTab,
+  focusedInferenceRunId = null,
+  onTabChange,
+  projectId,
+}: ProjectDetailPageProps) {
   const queryClient = useQueryClient();
   const { language, t } = useLanguage();
+  const previousInferenceStatusesRef = useRef<Map<string, string>>(new Map());
   const [datasetDialogOpen, setDatasetDialogOpen] = useState(false);
   const [datasetName, setDatasetName] = useState("");
   const [datasetEditName, setDatasetEditName] = useState("");
@@ -587,7 +693,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   const [trainingResultRunId, setTrainingResultRunId] = useState<string | null>(null);
   const [trainingName, setTrainingName] = useState("");
   const [trainingSplitId, setTrainingSplitId] = useState("");
-  const [trainingModelName, setTrainingModelName] = useState("yolo11n");
+  const [trainingModelName, setTrainingModelName] = useState("yolo26n");
   const [trainingPreset, setTrainingPreset] = useState<TrainingPresetKey>("balanced");
   const [trainingConfig, setTrainingConfig] = useState(defaultTrainingConfig);
   const [preflightResult, setPreflightResult] = useState<TrainingPreflight | null>(null);
@@ -653,8 +759,10 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     ) {
       return;
     }
-    const firstDataset = datasetsQuery.data?.[0];
-    setSelectedDatasetId(firstDataset?.id ?? null);
+    if (selectedDatasetId) {
+      setSelectedDatasetId(null);
+      setExpandedSplitDatasetId(null);
+    }
   }, [
     datasetsQuery.data,
     pendingDatasetId,
@@ -844,6 +952,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     enabled: activeTab === "training" || activeTab === "inference",
     queryFn: () => apiGet<TrainingRun[]>(`/api/projects/${projectId}/training-runs`),
     queryKey: ["projects", projectId, "training-runs"],
+    refetchInterval: workRunsQueryRefetchInterval,
   });
   const trainingRuns = trainingRunsQuery.data ?? [];
 
@@ -860,10 +969,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     enabled: activeTab === "inference",
     queryFn: () => apiGet<InferenceRun[]>(`/api/projects/${projectId}/inference-runs`),
     queryKey: ["projects", projectId, "inference-runs"],
-    refetchInterval: (query) => {
-      const runs = query.state.data ?? [];
-      return runs.some((run) => run.status === "queued" || run.status === "running") ? 2000 : false;
-    },
+    refetchInterval: workRunsQueryRefetchInterval,
   });
 
   const runtimeQuery = useQuery({
@@ -880,7 +986,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
   const selectedInferenceArtifactId = inferenceArtifactId || artifactOptions[0]?.artifact.id || "";
   const inferenceRuns = inferenceRunsQuery.data ?? [];
   const selectedInferenceRun =
-    inferenceRuns.find((run) => run.id === selectedInferenceRunId) ?? inferenceRuns[0] ?? null;
+    inferenceRuns.find((run) => run.id === selectedInferenceRunId) ?? null;
   const inferencePredictionQueries = useQueries({
     queries: inferenceRuns.map((run) => ({
       enabled: activeTab === "inference",
@@ -889,7 +995,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
           `/api/projects/${projectId}/inference-runs/${run.id}/predictions`,
         ),
       queryKey: ["projects", projectId, "inference-runs", run.id, "predictions"],
-      refetchInterval: run.status === "queued" || run.status === "running" ? 2000 : false,
+      refetchInterval: shouldRefetchPredictionResults(run),
     })),
   });
   const inferencePredictionsByRunId = useMemo(() => {
@@ -914,19 +1020,28 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     [prioritizedTrainingRuns, trainingSplitId],
   );
   const selectedTrainingRun =
-    selectedSplitTrainingRuns.find((run) => run.id === selectedTrainingRunId) ??
-    selectedSplitTrainingRuns[0] ??
-    null;
+    trainingSplitId
+      ? selectedSplitTrainingRuns.find((run) => run.id === selectedTrainingRunId) ??
+        selectedSplitTrainingRuns[0] ??
+        null
+      : null;
 
   useEffect(() => {
-    if (trainingSplitId && trainingSplitOptions.some((option) => option.split.id === trainingSplitId)) {
+    if (!trainingSplitId || trainingSplitOptions.some((option) => option.split.id === trainingSplitId)) {
       return;
     }
-    setTrainingSplitId(trainingSplitOptions[0]?.split.id ?? "");
+    setTrainingSplitId("");
+    setSelectedTrainingRunId(null);
   }, [trainingSplitId, trainingSplitOptions]);
 
   useEffect(() => {
     if (!trainingRunsQuery.data) return;
+    if (!trainingSplitId) {
+      if (selectedTrainingRunId) {
+        setSelectedTrainingRunId(null);
+      }
+      return;
+    }
     const nextTrainingRun =
       selectedSplitTrainingRuns.find((run) => run.id === selectedTrainingRunId) ??
       selectedSplitTrainingRuns[0] ??
@@ -935,7 +1050,7 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
       return;
     }
     setSelectedTrainingRunId(nextTrainingRun?.id ?? null);
-  }, [selectedSplitTrainingRuns, selectedTrainingRunId, trainingRunsQuery.data]);
+  }, [selectedSplitTrainingRuns, selectedTrainingRunId, trainingRunsQuery.data, trainingSplitId]);
 
   useEffect(() => {
     if (inferenceArtifactId && artifactOptions.some((option) => option.artifact.id === inferenceArtifactId)) {
@@ -946,11 +1061,42 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
 
   useEffect(() => {
     if (!inferenceRunsQuery.data) return;
-    const nextRun =
-      inferenceRuns.find((run) => run.id === selectedInferenceRunId) ?? inferenceRuns[0] ?? null;
-    if (nextRun?.id === selectedInferenceRunId) return;
-    setSelectedInferenceRunId(nextRun?.id ?? null);
+    if (selectedInferenceRunId && !inferenceRuns.some((run) => run.id === selectedInferenceRunId)) {
+      setSelectedInferenceRunId(null);
+    }
   }, [inferenceRuns, inferenceRunsQuery.data, selectedInferenceRunId]);
+
+  useEffect(() => {
+    const previousStatuses = previousInferenceStatusesRef.current;
+    const nextStatuses = new Map<string, string>();
+
+    for (const run of inferenceRuns) {
+      const normalizedStatus = run.status.trim().toLowerCase();
+      const previousStatus = previousStatuses.get(run.id);
+      nextStatuses.set(run.id, normalizedStatus);
+
+      if (
+        previousStatus &&
+        isActiveWorkStatus(previousStatus) &&
+        isTerminalWorkStatus(normalizedStatus)
+      ) {
+        queryClient.invalidateQueries({
+          queryKey: ["projects", projectId, "inference-runs", run.id],
+        });
+        queryClient.invalidateQueries({
+          queryKey: ["projects", projectId, "inference-runs", run.id, "predictions"],
+        });
+      }
+    }
+
+    previousInferenceStatusesRef.current = nextStatuses;
+  }, [inferenceRuns, projectId, queryClient]);
+
+  useEffect(() => {
+    if (!focusedInferenceRunId) return;
+    setSelectedInferenceRunId(focusedInferenceRunId);
+    setExpandedInferenceRunId(focusedInferenceRunId);
+  }, [focusedInferenceRunId]);
 
   const createTrainingRun = useMutation({
     mutationFn: (body: TrainingRunCreate) =>
@@ -988,7 +1134,8 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
         ["projects", projectId, "inference-runs"],
         (currentRuns = []) => [run, ...currentRuns.filter((currentRun) => currentRun.id !== run.id)],
       );
-      queryClient.invalidateQueries({ queryKey: ["projects", projectId, "inference-runs"] });
+      queryClient.setQueryData(["projects", projectId, "inference-runs", run.id], run);
+      queryClient.setQueryData(["projects", projectId, "inference-runs", run.id, "predictions"], []);
     },
   });
 
@@ -1189,6 +1336,11 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
 
   function selectTrainingSplit(datasetId: string, splitId: string) {
     clearTrainingCommandPreview();
+    if (trainingSplitId === splitId) {
+      setTrainingSplitId("");
+      setSelectedTrainingRunId(null);
+      return;
+    }
     setSelectedDatasetId(datasetId);
     setExpandedSplitDatasetId(datasetId);
     setTrainingSplitId(splitId);
@@ -1224,9 +1376,20 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
 
   function inferenceInputSummary(run: InferenceRun): string {
     if (run.input_type === "folder" && isManagedVisionOpsPath(run.input_path)) {
-      return t("inference.uploadedFolder");
+      const uploadedFolderName = run.config.uploaded_folder_name;
+      if (typeof uploadedFolderName === "string" && uploadedFolderName.trim()) {
+        return uploadedFolderName;
+      }
     }
     return fileName(run.input_path);
+  }
+
+  function inferenceFolderImageCount(run: InferenceRun): number {
+    const inputImageCount = run.config.input_image_count;
+    if (typeof inputImageCount === "number" && Number.isFinite(inputImageCount)) {
+      return inputImageCount;
+    }
+    return run.prediction_count;
   }
 
   function handleInferenceSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1306,6 +1469,21 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
     }));
   }
 
+  function applyTrainingModel(modelName: string) {
+    const modelOption = trainingModelOptions.find((option) => option.value === modelName);
+    clearTrainingCommandPreview();
+    setTrainingModelName(modelName);
+    if (!modelOption) return;
+    setTrainingConfig((currentConfig) => ({
+      ...currentConfig,
+      ...modelOption.config,
+      close_mosaic: 10,
+      mosaic: 1,
+      mixup: currentConfig.mixup,
+      optimizer: currentConfig.optimizer || "auto",
+    }));
+  }
+
   function updateInferenceNumberConfig(
     key: keyof typeof defaultInferenceConfig,
     value: number,
@@ -1319,12 +1497,12 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
 
   function handleSelectDataset(datasetId: string) {
     setPendingDatasetId(null);
-    setSelectedDatasetId(datasetId);
+    setSelectedDatasetId((currentId) => (currentId === datasetId ? null : datasetId));
   }
 
   function toggleDatasetSplits(datasetId: string) {
     setPendingDatasetId(null);
-    setSelectedDatasetId(datasetId);
+    setSelectedDatasetId((currentId) => (currentId === datasetId ? null : datasetId));
     setExpandedSplitDatasetId((currentId) => (currentId === datasetId ? null : datasetId));
   }
 
@@ -1496,7 +1674,6 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                           <div className="split-list">
                             {(splitsQuery.data ?? []).map((split) => (
                               <div className="split-row" key={split.id}>
-                                <CheckCircle2 aria-hidden="true" size={18} />
                                 <span>
                                   <strong>{split.name}</strong>
                                   <small>
@@ -2225,15 +2402,21 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
               <label className="field">
                 <FieldLabel help={t("training.help.modelPreset")} label={t("training.modelPreset")} />
                 <select
+                  aria-label={t("training.modelPreset")}
                   onChange={(event) => {
-                    clearTrainingCommandPreview();
-                    setTrainingModelName(event.target.value);
+                    applyTrainingModel(event.target.value);
                   }}
                   value={trainingModelName}
                 >
-                  <option value="yolo11n">yolo11n</option>
-                  <option value="yolov8n">yolov8n</option>
-                  <option value="yolov8s">yolov8s</option>
+                  {trainingModelGroups.map((group) => (
+                    <optgroup key={group.group} label={group.group}>
+                      {group.options.map((model) => (
+                        <option key={model.value} value={model.value}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
                 </select>
               </label>
 
@@ -2691,7 +2874,11 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                     >
                       <button
                         className="inference-run-summary"
-                        onClick={() => setSelectedInferenceRunId(run.id)}
+                        onClick={() =>
+                          setSelectedInferenceRunId((currentId) =>
+                            currentId === run.id ? null : run.id,
+                          )
+                        }
                         type="button"
                       >
                         <div className="inference-run-thumbnail">
@@ -2716,11 +2903,13 @@ export function ProjectDetailPage({ activeTab, onTabChange, projectId }: Project
                           <div className="inference-run-meta">
                             <span>{inferenceInputTypeLabel(run)}</span>
                             <span>{inferenceInputSummary(run)}</span>
-                            <span>
-                              {t("inference.predictionCount", {
-                                count: formatCount(run.prediction_count, language),
-                              })}
-                            </span>
+                            {run.input_type === "folder" ? (
+                              <span>
+                                {t("inference.imageCount", {
+                                  count: formatCount(inferenceFolderImageCount(run), language),
+                                })}
+                              </span>
+                            ) : null}
                           </div>
                           <code title={run.id}>{shortInternalId(run.id)}</code>
                         </div>

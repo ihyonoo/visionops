@@ -20,6 +20,7 @@ class Project(TimestampMixin, Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
+    slug: Mapped[str] = mapped_column(String, default="", nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     task_type: Mapped[str] = mapped_column(String, default="detection", nullable=False)
 

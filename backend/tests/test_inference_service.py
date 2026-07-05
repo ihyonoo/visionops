@@ -277,7 +277,12 @@ def test_upload_inference_folder_creates_managed_input_and_queued_job(client, db
     body = response.json()
     assert body["name"] == "uploaded-folder"
     assert body["input_type"] == "folder"
-    assert body["config"] == {"conf": 0.35, "imgsz": 512}
+    assert body["config"] == {
+        "conf": 0.35,
+        "imgsz": 512,
+        "input_image_count": 2,
+        "uploaded_folder_name": "images",
+    }
     input_path = Path(body["input_path"])
     assert input_path.is_dir()
     assert (input_path / "nested" / "part-a.jpg").read_bytes() == b"image-a"

@@ -1,6 +1,8 @@
 import {
   Activity,
   Bell,
+  ChevronDown,
+  ChevronUp,
   ClipboardList,
   Database,
   Eye,
@@ -11,10 +13,12 @@ import {
   Plus,
   Search,
   Settings,
+  X,
 } from "lucide-react";
 import { CSSProperties, PointerEvent, ReactNode, useEffect, useRef, useState } from "react";
 
 import type { Project } from "../api/types";
+import visionOpsLogoUrl from "../assets/visionops-logo.svg";
 import { LanguageControl, useLanguage } from "../i18n/LanguageProvider";
 import { ThemeControl } from "../theme/ThemeProvider";
 
@@ -27,11 +31,24 @@ export type GlobalSection =
 
 export type ProjectSort = "updated_desc" | "name_asc";
 
+export type AppNotification = {
+  body: string;
+  createdAt: string;
+  id: string;
+  projectId?: string;
+  runId?: string;
+  title: string;
+  tone: "success" | "danger" | "info";
+};
+
 type LayoutProps = {
   activeSection: GlobalSection;
   children: ReactNode;
   hiddenProjectIds?: string[];
+  notifications?: AppNotification[];
   onCreateProject?: () => void;
+  onNotificationDismiss?: (notificationId: string) => void;
+  onNotificationOpen?: (notification: AppNotification) => void;
   onProjectSortChange?: (sort: ProjectSort) => void;
   onSelectProject?: (projectId: string) => void;
   onToggleProjectHidden?: (projectId: string) => void;
@@ -115,6 +132,7 @@ function ProjectSidebar({
 }) {
   const { t } = useLanguage();
   const [searchQuery, setSearchQuery] = useState("");
+  const [hiddenProjectsExpanded, setHiddenProjectsExpanded] = useState(true);
   const hiddenSet = new Set(hiddenProjectIds);
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
   const filteredProjects = normalizedSearchQuery
@@ -221,46 +239,66 @@ function ProjectSidebar({
           );
         })}
         {hiddenProjects.length > 0 ? (
-          <div className="project-sidebar__hidden-label">
-            <span>{t("projectSidebar.hiddenGroup")}</span>
-          </div>
-        ) : null}
-        {hiddenProjects.map((project) => {
-          const isHidden = hiddenSet.has(project.id);
-          return (
-            <div
-              className="project-sidebar__row"
-              data-hidden="true"
-              data-selected={selectedProjectId === project.id ? "true" : undefined}
-              key={project.id}
+          <>
+            <button
+              aria-expanded={hiddenProjectsExpanded}
+              className="project-sidebar__hidden-toggle"
+              onClick={() => setHiddenProjectsExpanded((current) => !current)}
+              type="button"
             >
-              <button
-                aria-disabled="true"
-                className="project-sidebar__project"
-                disabled
-                onClick={() => onSelectProject(project.id)}
-                type="button"
-              >
-                <span>
-                  <strong>{project.name}</strong>
-                </span>
-              </button>
-              <button
-                aria-label={t("projectSidebar.showProject", { name: project.name })}
-                className="icon-button project-sidebar__hide"
-                onClick={() => onToggleProjectHidden(project.id)}
-                title={t("projectSidebar.showProject", { name: project.name })}
-                type="button"
-              >
-                {isHidden ? (
-                  <EyeOff aria-hidden="true" size={15} />
-                ) : (
-                  <Eye aria-hidden="true" size={15} />
-                )}
-              </button>
-            </div>
-          );
-        })}
+              <span>{t("projectSidebar.hiddenGroup")}</span>
+              <span className="project-sidebar__hidden-separator" aria-hidden="true">
+                ·
+              </span>
+              <small>{hiddenProjects.length}</small>
+              {hiddenProjectsExpanded ? (
+                <ChevronUp aria-hidden="true" size={14} />
+              ) : (
+                <ChevronDown aria-hidden="true" size={14} />
+              )}
+            </button>
+            {hiddenProjectsExpanded ? (
+              <div className="project-sidebar__hidden-list">
+                {hiddenProjects.map((project) => {
+                  const isHidden = hiddenSet.has(project.id);
+                  return (
+                    <div
+                      className="project-sidebar__row"
+                      data-hidden="true"
+                      data-selected={selectedProjectId === project.id ? "true" : undefined}
+                      key={project.id}
+                    >
+                      <button
+                        aria-disabled="true"
+                        className="project-sidebar__project"
+                        disabled
+                        onClick={() => onSelectProject(project.id)}
+                        type="button"
+                      >
+                        <span>
+                          <strong>{project.name}</strong>
+                        </span>
+                      </button>
+                      <button
+                        aria-label={t("projectSidebar.showProject", { name: project.name })}
+                        className="icon-button project-sidebar__hide"
+                        onClick={() => onToggleProjectHidden(project.id)}
+                        title={t("projectSidebar.showProject", { name: project.name })}
+                        type="button"
+                      >
+                        {isHidden ? (
+                          <EyeOff aria-hidden="true" size={15} />
+                        ) : (
+                          <Eye aria-hidden="true" size={15} />
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </>
+        ) : null}
         {!projectsLoading && sidebarProjects.length === 0 ? (
           <div className="empty-state empty-state--compact">
             <p>{t("projects.empty")}</p>
@@ -275,7 +313,10 @@ export function Layout({
   activeSection,
   children,
   hiddenProjectIds = [],
+  notifications = [],
   onCreateProject = () => undefined,
+  onNotificationDismiss = () => undefined,
+  onNotificationOpen = () => undefined,
   onProjectSortChange = () => undefined,
   onSelectProject = () => undefined,
   onToggleProjectHidden = () => undefined,
@@ -284,9 +325,9 @@ export function Layout({
   projectsLoading = false,
   projectSort = "updated_desc",
   selectedProjectId = null,
-  title,
 }: LayoutProps) {
   const [headerNotice, setHeaderNotice] = useState<string | null>(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projectSidebarWidth, setProjectSidebarWidth] = useState(storedSidebarWidth);
   const [projectSidebarCollapsed, setProjectSidebarCollapsed] = useState(storedSidebarCollapsed);
@@ -356,11 +397,12 @@ export function Layout({
               type="button"
             >
               <span className="brand__mark" aria-hidden="true">
-                VO
+                <img alt="" src={visionOpsLogoUrl} />
               </span>
               <span>
                 <span className="brand__name">VisionOps</span>
               </span>
+              <span className="visually-hidden">{t("nav.projects")}</span>
             </button>
             <nav className="top-nav" aria-label={t("nav.primary")}>
               {navItems.map((item) => {
@@ -382,35 +424,76 @@ export function Layout({
                 );
               })}
             </nav>
-            <div className="header-title">
-              <h1>{title}</h1>
-            </div>
           </div>
           <div className="header-actions">
-            <button
-              className="icon-button"
-              aria-label={t("header.search")}
-              onClick={() => {
-                setSettingsOpen(false);
-                setHeaderNotice(t("header.searchSoon"));
-              }}
-              title={t("header.search")}
-              type="button"
-            >
-              <Search aria-hidden="true" size={18} />
-            </button>
-            <button
-              className="icon-button"
-              aria-label={t("header.notifications")}
-              onClick={() => {
-                setSettingsOpen(false);
-                setHeaderNotice(t("header.noNotifications"));
-              }}
-              title={t("header.notifications")}
-              type="button"
-            >
-              <Bell aria-hidden="true" size={18} />
-            </button>
+            <div className="notifications-wrapper">
+              <button
+                aria-controls="notifications-panel"
+                aria-expanded={notificationsOpen}
+                className="icon-button"
+                aria-label={t("header.notifications")}
+                data-active={notificationsOpen ? "true" : undefined}
+                onClick={() => {
+                  setSettingsOpen(false);
+                  setHeaderNotice(null);
+                  setNotificationsOpen((isOpen) => !isOpen);
+                }}
+                title={t("header.notifications")}
+                type="button"
+              >
+                <Bell aria-hidden="true" size={18} />
+                {notifications.length > 0 ? (
+                  <span className="notification-count" aria-label={t("header.notificationCount", { count: notifications.length })}>
+                    {notifications.length}
+                  </span>
+                ) : null}
+              </button>
+              {notificationsOpen ? (
+                <div
+                  aria-label={t("header.notifications")}
+                  className="notifications-panel"
+                  id="notifications-panel"
+                  role="dialog"
+                >
+                  <div className="notifications-panel__header">
+                    <strong>{t("header.notifications")}</strong>
+                    <span>{t("header.notificationCount", { count: notifications.length })}</span>
+                  </div>
+                  {notifications.length > 0 ? (
+                    <div className="notifications-panel__list">
+                      {notifications.map((notification) => (
+                        <div
+                          className="notifications-panel__item"
+                          data-tone={notification.tone}
+                          key={notification.id}
+                        >
+                          <button
+                            className="notifications-panel__open"
+                            onClick={() => onNotificationOpen(notification)}
+                            type="button"
+                          >
+                            <strong>{notification.title}</strong>
+                            <span>{notification.body}</span>
+                          </button>
+                          <button
+                            aria-label={t("header.dismissNotification", { title: notification.title })}
+                            className="icon-button notifications-panel__dismiss"
+                            onClick={() => onNotificationDismiss(notification.id)}
+                            type="button"
+                          >
+                            <X aria-hidden="true" size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="empty-state empty-state--compact notifications-panel__empty">
+                      <p>{t("header.noNotifications")}</p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
             <div className="settings-wrapper">
               <button
                 aria-controls="settings-panel"
@@ -420,6 +503,7 @@ export function Layout({
                 aria-label={t("header.settings")}
                 onClick={() => {
                   setHeaderNotice(null);
+                  setNotificationsOpen(false);
                   setSettingsOpen((isOpen) => !isOpen);
                 }}
                 title={t("header.settings")}
@@ -471,6 +555,15 @@ export function Layout({
         >
           {showProjectSidebar && projectSidebarCollapsed ? (
             <aside className="project-sidebar-rail" aria-label={t("projectSidebar.label")}>
+              <button
+                aria-label={t("projectSidebar.expand")}
+                className="project-sidebar-rail__open"
+                onClick={() => setProjectSidebarCollapsed(false)}
+                title={t("projectSidebar.expand")}
+                type="button"
+              >
+                <span aria-hidden="true">→</span>
+              </button>
               <button
                 aria-label={t("projectSidebar.resize")}
                 className="project-sidebar-rail__resize-handle"

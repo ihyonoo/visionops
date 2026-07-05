@@ -19,6 +19,7 @@ class ProjectUpdate(BaseModel):
 class ProjectRead(BaseModel):
     id: str
     name: str
+    slug: str
     description: str
     task_type: str
     created_at: datetime

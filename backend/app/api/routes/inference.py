@@ -103,6 +103,24 @@ def _require_image_uploads(files: list[UploadFile]) -> None:
         )
 
 
+def _uploaded_folder_name(files: list[UploadFile]) -> str | None:
+    for file in files:
+        parts = _upload_name_parts(file.filename or "")
+        if len(parts) > 1:
+            return parts[0]
+    return None
+
+
+def _folder_image_count(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    return sum(
+        1
+        for child in path.rglob("*")
+        if child.is_file() and child.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
 def _store_inference_uploads(
     *, project_id: str, run_id: str, input_type: str, files: list[UploadFile]
 ) -> Path:
@@ -183,7 +201,14 @@ def create_inference_run(
         input_type=payload.input_type,
         input_path=payload.input_path,
         status="queued",
-        config=payload.config.model_dump(),
+        config={
+            **payload.config.model_dump(),
+            **(
+                {"input_image_count": _folder_image_count(Path(payload.input_path))}
+                if payload.input_type == "folder"
+                else {}
+            ),
+        },
         prediction_count=0,
     )
     db.add(run)
@@ -219,6 +244,7 @@ def upload_inference_run(
         input_type=normalized_input_type,
         files=inputs,
     )
+    uploaded_folder_name = _uploaded_folder_name(inputs) if normalized_input_type == "folder" else None
     run = InferenceRun(
         id=run_id,
         project_id=project_id,
@@ -227,7 +253,18 @@ def upload_inference_run(
         input_type=normalized_input_type,
         input_path=str(input_path),
         status="queued",
-        config={"conf": conf, "imgsz": imgsz},
+        config={
+            "conf": conf,
+            "imgsz": imgsz,
+            **(
+                {
+                    "input_image_count": len(inputs),
+                    **({"uploaded_folder_name": uploaded_folder_name} if uploaded_folder_name else {}),
+                }
+                if normalized_input_type == "folder"
+                else {}
+            ),
+        },
         prediction_count=0,
     )
     db.add(run)
