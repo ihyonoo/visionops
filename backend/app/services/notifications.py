@@ -40,8 +40,9 @@ def default_events() -> dict[str, bool]:
 def mask_secret(secret: str | None) -> str | None:
     if not secret:
         return None
-    prefix_length = min(8, len(secret))
-    return f"{secret[:prefix_length]}****"
+    if len(secret) <= 8:
+        return "••••••••"
+    return f"{secret[:8]}****"
 
 
 def redact_secret(message: str, secrets: list[str | None]) -> str:

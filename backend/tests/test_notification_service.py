@@ -8,6 +8,7 @@ from app.db import SessionLocal
 from app.models import NotificationChannel, NotificationDelivery
 from app.services.notifications import (
     NotificationEvent,
+    masked_channel_secret,
     mask_secret,
     redact_secret,
     send_work_notification,
@@ -29,6 +30,28 @@ def test_mask_secret_preserves_prefix_and_hides_tail():
     assert masked.startswith("https://")
     assert "SECRET" not in masked
     assert masked.endswith("****")
+
+
+def test_mask_secret_hides_entire_short_secret():
+    masked = mask_secret("SECRET")
+
+    assert masked is not None
+    assert "SECRET" not in masked
+    assert set(masked) == {"•"}
+
+
+def test_masked_channel_secret_hides_short_telegram_token_and_chat_id():
+    masked = masked_channel_secret(
+        "telegram",
+        {
+            "bot_token": "SECRET",
+            "chat_id": "CHAT",
+        },
+    )
+
+    assert masked is not None
+    assert "SECRET" not in masked
+    assert "CHAT" not in masked
 
 
 def test_redact_secret_removes_webhook_and_token():
