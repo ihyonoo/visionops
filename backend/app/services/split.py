@@ -8,7 +8,12 @@ from typing import Any
 
 import yaml
 
-from app.services.dataset_validation import IMAGE_EXTENSIONS, load_class_names
+from app.services.dataset_validation import (
+    CLASSIFICATION_SUBSETS,
+    IMAGE_EXTENSIONS,
+    load_class_names,
+    validate_classification_dataset,
+)
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,48 @@ def _copy_split_subset(
         )
 
     return subset_files, copied_paths, copied_label_paths
+
+
+def _classification_source_images(dataset_root: Path, class_name: str) -> list[Path]:
+    subset_roots = [
+        dataset_root / subset / class_name
+        for subset in CLASSIFICATION_SUBSETS
+        if (dataset_root / subset / class_name).is_dir()
+    ]
+    roots = subset_roots or [dataset_root / class_name]
+    return sorted(
+        path
+        for root in roots
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
+def _copy_classification_subset(
+    image_paths: list[Path],
+    split_root: Path,
+    subset: str,
+    class_name: str,
+) -> tuple[list[str], list[dict[str, str]]]:
+    subset_files: list[str] = []
+    copied_paths: list[dict[str, str]] = []
+
+    for source_image in image_paths:
+        destination_image = split_root / subset / class_name / source_image.name
+        destination_image.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_image, destination_image)
+
+        subset_files.append(f"{class_name}/{source_image.name}")
+        copied_paths.append(
+            {
+                "subset": subset,
+                "class_name": class_name,
+                "source_image": str(source_image),
+                "copied_image": str(destination_image),
+            }
+        )
+
+    return subset_files, copied_paths
 
 
 def create_copy_split(
@@ -195,5 +242,106 @@ def create_copy_split(
         val_count=len(val_files),
         test_count=len(test_files),
         dataset_yaml_path=split_root / "data.yaml",
+        manifest_path=split_root / "split_manifest.json",
+    )
+
+
+def create_classification_copy_split(
+    dataset_root: Path,
+    split_root: Path,
+    train_ratio: float,
+    val_ratio: float,
+    seed: int,
+    test_ratio: float = 0.0,
+) -> CopySplitResult:
+    if not 0 <= train_ratio <= 1 or not 0 <= val_ratio <= 1 or not 0 <= test_ratio <= 1:
+        raise ValueError("train_ratio, val_ratio, test_ratio는 0과 1 사이여야 합니다.")
+    if abs((train_ratio + val_ratio + test_ratio) - 1.0) > 1e-6:
+        raise ValueError("train_ratio, val_ratio, test_ratio의 합은 1.0이어야 합니다.")
+
+    dataset_root = dataset_root.resolve()
+    split_root = split_root.resolve()
+    if split_root.exists() and any(split_root.iterdir()):
+        raise ValueError("split_root가 비어 있지 않습니다.")
+
+    validation = validate_classification_dataset(dataset_root)
+    if validation.status == "invalid":
+        raise ValueError("; ".join(validation.errors))
+
+    train_files: list[str] = []
+    val_files: list[str] = []
+    test_files: list[str] = []
+    copied_paths: list[dict[str, str]] = []
+
+    split_root.parent.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(
+        tempfile.mkdtemp(prefix=f".{split_root.name}.tmp-", dir=split_root.parent)
+    ).resolve()
+    try:
+        for class_name in validation.class_names:
+            image_paths = _classification_source_images(dataset_root, class_name)
+            shuffled_images = image_paths[:]
+            random.Random(f"{seed}:{class_name}").shuffle(shuffled_images)
+
+            train_count = round(len(shuffled_images) * train_ratio)
+            val_count = round(len(shuffled_images) * val_ratio)
+            train_images = shuffled_images[:train_count]
+            val_images = shuffled_images[train_count : train_count + val_count]
+            test_images = shuffled_images[train_count + val_count :]
+
+            class_train_files, class_train_copied_paths = _copy_classification_subset(
+                train_images, temp_root, "train", class_name
+            )
+            class_val_files, class_val_copied_paths = _copy_classification_subset(
+                val_images, temp_root, "val", class_name
+            )
+            class_test_files, class_test_copied_paths = _copy_classification_subset(
+                test_images, temp_root, "test", class_name
+            )
+
+            train_files.extend(class_train_files)
+            val_files.extend(class_val_files)
+            test_files.extend(class_test_files)
+            copied_paths.extend(
+                class_train_copied_paths + class_val_copied_paths + class_test_copied_paths
+            )
+
+        manifest_path = temp_root / "split_manifest.json"
+        manifest = {
+            "task_type": "classification",
+            "source_dataset_root": str(dataset_root),
+            "split_root": str(split_root),
+            "train_ratio": train_ratio,
+            "val_ratio": val_ratio,
+            "test_ratio": test_ratio,
+            "seed": seed,
+            "train_files": train_files,
+            "val_files": val_files,
+            "test_files": test_files,
+            "train_count": len(train_files),
+            "val_count": len(val_files),
+            "test_count": len(test_files),
+            "class_distribution": validation.class_distribution,
+            "copied_paths": copied_paths,
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        if split_root.exists():
+            split_root.rmdir()
+        temp_root.replace(split_root)
+    except Exception:
+        shutil.rmtree(temp_root, ignore_errors=True)
+        if split_root.exists() and not any(split_root.iterdir()):
+            split_root.rmdir()
+        raise
+
+    return CopySplitResult(
+        train_count=len(train_files),
+        val_count=len(val_files),
+        test_count=len(test_files),
+        dataset_yaml_path=split_root,
         manifest_path=split_root / "split_manifest.json",
     )

@@ -25,6 +25,15 @@ def _make_dataset(root: Path, image_count: int = 4) -> Path:
     return root
 
 
+def _make_classification_dataset(root: Path, per_class: int = 4) -> Path:
+    for class_name in ("ok", "ng"):
+        class_dir = root / class_name
+        class_dir.mkdir(parents=True)
+        for index in range(per_class):
+            _write_image(class_dir / f"{class_name}-{index}.jpg")
+    return root
+
+
 def test_create_copy_split_writes_expected_artifacts(tmp_path):
     dataset_root = _make_dataset(tmp_path / "dataset", image_count=4)
     split_root = tmp_path / "split"
@@ -123,3 +132,32 @@ def test_create_copy_split_rejects_non_empty_existing_split_root(tmp_path):
 
     assert stale_file.read_text(encoding="utf-8") == "old artifact"
     assert not (split_root / "data.yaml").exists()
+
+
+def test_create_classification_copy_split_writes_class_folder_layout(tmp_path):
+    from app.services.split import create_classification_copy_split
+
+    dataset_root = _make_classification_dataset(tmp_path / "cls", per_class=4)
+    split_root = tmp_path / "split"
+
+    result = create_classification_copy_split(
+        dataset_root=dataset_root,
+        split_root=split_root,
+        train_ratio=0.5,
+        val_ratio=0.25,
+        test_ratio=0.25,
+        seed=7,
+    )
+
+    assert result.train_count == 4
+    assert result.val_count == 2
+    assert result.test_count == 2
+    assert result.dataset_yaml_path == split_root
+    assert len(list((split_root / "train" / "ok").glob("*.jpg"))) == 2
+    assert len(list((split_root / "train" / "ng").glob("*.jpg"))) == 2
+    assert len(list((split_root / "val" / "ok").glob("*.jpg"))) == 1
+    assert len(list((split_root / "test" / "ng").glob("*.jpg"))) == 1
+
+    manifest = json.loads((split_root / "split_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["class_distribution"] == {"ng": 4, "ok": 4}
+    assert manifest["task_type"] == "classification"
