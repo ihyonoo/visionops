@@ -1861,7 +1861,7 @@ describe("ProjectDetailPage", () => {
     const splitDetail = container.querySelector<HTMLElement>(".dataset-row-detail");
     expect(splitDetail?.closest(".dataset-list")).not.toBeNull();
     expect(datasetRow?.textContent).toContain("Split 목록 접기 · 1개");
-    expect(datasetRow?.dataset.selected).toBe("true");
+    expect(datasetRow?.dataset.selected).toBeUndefined();
     expect(splitDetail?.textContent).toContain("Split 생성");
     expect(splitDetail?.textContent).toContain("기본 split");
     expect(splitDetail?.textContent).toContain("8 / 2 / 0");
@@ -1871,15 +1871,49 @@ describe("ProjectDetailPage", () => {
     expect(container.querySelectorAll(".split-form")).toHaveLength(0);
 
     act(() => {
-      Array.from(splitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+
+    expect(container.querySelector(".dataset-row-detail")).toBeNull();
+    expect(datasetRow?.dataset.selected).toBeUndefined();
+
+    act(() => {
+      datasetRow?.click();
+    });
+
+    expect(datasetRow?.dataset.selected).toBe("true");
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+
+    expect(container.querySelector(".dataset-row-detail")).not.toBeNull();
+    expect(datasetRow?.dataset.selected).toBe("true");
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+
+    expect(container.querySelector(".dataset-row-detail")).toBeNull();
+    expect(datasetRow?.dataset.selected).toBe("true");
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
+    });
+
+    const selectedSplitDetail = container.querySelector<HTMLElement>(".dataset-row-detail");
+
+    act(() => {
+      Array.from(selectedSplitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
         .find((button) => button.textContent?.includes("이 Split으로 학습"))
         ?.click();
     });
 
     expect(onTabChange).toHaveBeenCalledWith("training");
+    expect(datasetRow?.dataset.selected).toBe("true");
 
     act(() => {
-      Array.from(splitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+      Array.from(selectedSplitDetail?.querySelectorAll<HTMLButtonElement>("button") ?? [])
         .find((button) => button.textContent?.includes("Split 생성"))
         ?.click();
     });
@@ -1890,13 +1924,6 @@ describe("ProjectDetailPage", () => {
     act(() => {
       container.querySelector<HTMLButtonElement>("[aria-label='Split 생성 닫기']")?.click();
     });
-
-    act(() => {
-      container.querySelector<HTMLButtonElement>("[aria-label='dataset split 설정']")?.click();
-    });
-
-    expect(container.querySelector(".dataset-row-detail")).toBeNull();
-    expect(datasetRow?.dataset.selected).toBeUndefined();
 
     act(() => root.unmount());
     container.remove();

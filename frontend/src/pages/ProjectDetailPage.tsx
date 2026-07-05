@@ -1502,7 +1502,6 @@ export function ProjectDetailPage({
 
   function toggleDatasetSplits(datasetId: string) {
     setPendingDatasetId(null);
-    setSelectedDatasetId((currentId) => (currentId === datasetId ? null : datasetId));
     setExpandedSplitDatasetId((currentId) => (currentId === datasetId ? null : datasetId));
   }
 
@@ -1538,7 +1537,8 @@ export function ProjectDetailPage({
 
             <div className="dataset-list">
               {visibleDatasets.map((dataset, index) => {
-                const datasetSplits = trainingSplitQueries[index]?.data ?? [];
+                const datasetSplitsQuery = trainingSplitQueries[index];
+                const datasetSplits = datasetSplitsQuery?.data ?? [];
                 const isSelectedDataset = selectedDatasetId === dataset.id;
                 const isSplitExpanded = expandedSplitDatasetId === dataset.id;
 
@@ -1629,24 +1629,23 @@ export function ProjectDetailPage({
                         <button
                           aria-expanded={isSplitExpanded}
                           aria-label={t("split.toggleSettings", { name: dataset.name })}
-                          className="dataset-row__split-toggle"
+                          className="secondary-button dataset-row__split-toggle"
                           onClick={(event) => {
                             event.stopPropagation();
                             toggleDatasetSplits(dataset.id);
                           }}
                           type="button"
                         >
-                          <GitBranch aria-hidden="true" size={15} />
-                          <span>
-                            {t(isSplitExpanded ? "split.toggleClose" : "split.toggleOpen", {
-                              count: datasetSplits.length,
-                            })}
-                          </span>
                           {isSplitExpanded ? (
                             <ChevronUp aria-hidden="true" size={15} />
                           ) : (
                             <ChevronDown aria-hidden="true" size={15} />
                           )}
+                          <span>
+                            {t(isSplitExpanded ? "split.toggleClose" : "split.toggleOpen", {
+                              count: datasetSplits.length,
+                            })}
+                          </span>
                         </button>
                       </span>
                     </article>
@@ -1658,7 +1657,7 @@ export function ProjectDetailPage({
                               <h3>{t("split.list")}</h3>
                             </div>
                             <div className="dataset-row-detail__actions">
-                              {splitsQuery.isFetching ? (
+                              {datasetSplitsQuery?.isFetching ? (
                                 <Loader2 aria-hidden="true" className="spin" size={18} />
                               ) : null}
                               <button
@@ -1672,7 +1671,7 @@ export function ProjectDetailPage({
                             </div>
                           </div>
                           <div className="split-list">
-                            {(splitsQuery.data ?? []).map((split) => (
+                            {datasetSplits.map((split) => (
                               <div className="split-row" key={split.id}>
                                 <span>
                                   <strong>{split.name}</strong>
@@ -1725,9 +1724,7 @@ export function ProjectDetailPage({
                               </div>
                             ))}
                           </div>
-                          {selectedDatasetId &&
-                          !splitsQuery.isLoading &&
-                          (splitsQuery.data ?? []).length === 0 ? (
+                          {!datasetSplitsQuery?.isLoading && datasetSplits.length === 0 ? (
                             <div className="empty-state empty-state--compact">
                               <GitBranch aria-hidden="true" size={22} />
                               <p>{t("split.empty")}</p>
