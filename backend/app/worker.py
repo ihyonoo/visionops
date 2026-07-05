@@ -17,12 +17,14 @@ from app.models import (
     InferenceRun,
     Job,
     ModelArtifact,
+    Project,
     TrainingRun,
 )
 from app.services.jobs import COMPLETED, FAILED, claim_next_job, fail_job
 from app.services.ids import new_id
 from app.services.inference import run_yolo_inference
 from app.services.metrics import read_results_csv, summarize_metrics
+from app.services.notifications import NotificationEvent, send_work_notification
 from app.services.storage import StoragePaths
 from app.services.training import run_yolo_training
 
@@ -36,6 +38,91 @@ BOX_COLORS = [
     (147, 51, 234),
     (220, 38, 38),
 ]
+
+
+def _project_name(db: Session, project_id: str) -> str:
+    project = db.get(Project, project_id)
+    if project is None:
+        return project_id
+    return project.name
+
+
+def _event_text(
+    *,
+    event_type: str,
+    target_type: str,
+    project_name: str,
+    run_name: str,
+    status: str,
+) -> str:
+    result = "completed" if event_type.endswith("_completed") else "failed"
+    return f"{target_type.title()} {run_name} {result} in {project_name} (status: {status})."
+
+
+def _work_notification_event(
+    *,
+    event_type: str,
+    target_type: str,
+    target_id: str,
+    project_name: str,
+    run_name: str,
+    status: str,
+    occurred_at: datetime,
+    summary: dict,
+) -> NotificationEvent:
+    event = NotificationEvent(
+        event_type=event_type,
+        target_type=target_type,
+        target_id=target_id,
+        text=_event_text(
+            event_type=event_type,
+            target_type=target_type,
+            project_name=project_name,
+            run_name=run_name,
+            status=status,
+        ),
+    )
+    object.__setattr__(event, "project_name", project_name)
+    object.__setattr__(event, "run_name", run_name)
+    object.__setattr__(event, "status", status)
+    object.__setattr__(event, "occurred_at", occurred_at)
+    object.__setattr__(event, "summary", summary)
+    return event
+
+
+def _send_notification_safely(db: Session, event: NotificationEvent) -> None:
+    try:
+        send_work_notification(db, event)
+    except Exception:
+        db.rollback()
+
+
+def notify_training_finished(db: Session, run: TrainingRun, event_type: str) -> None:
+    event = _work_notification_event(
+        event_type=event_type,
+        target_type="training",
+        target_id=run.id,
+        project_name=_project_name(db, run.project_id),
+        run_name=run.name,
+        status=run.status,
+        occurred_at=run.finished_at or datetime.now(timezone.utc),
+        summary=run.metrics_summary or {},
+    )
+    _send_notification_safely(db, event)
+
+
+def notify_inference_finished(db: Session, run: InferenceRun, event_type: str) -> None:
+    event = _work_notification_event(
+        event_type=event_type,
+        target_type="inference",
+        target_id=run.id,
+        project_name=_project_name(db, run.project_id),
+        run_name=run.name,
+        status=run.status,
+        occurred_at=run.finished_at or datetime.now(timezone.utc),
+        summary={"prediction_count": run.prediction_count},
+    )
+    _send_notification_safely(db, event)
 
 
 def _training_config(run: TrainingRun) -> dict:
@@ -111,6 +198,7 @@ def handle_training_job(db: Session, job: Job) -> None:
         job.status = FAILED
         job.error_message = "학습에 사용할 split을 찾을 수 없습니다."
         db.commit()
+        notify_training_finished(db, run, "training_failed")
         return
 
     now = datetime.now(timezone.utc)
@@ -140,6 +228,7 @@ def handle_training_job(db: Session, job: Job) -> None:
         else:
             job.error_message = str(exc) or "학습 실행에 실패했습니다."
         db.commit()
+        notify_training_finished(db, run, "training_failed")
         return
 
     run.artifact_path = str(result.run_dir)
@@ -150,6 +239,7 @@ def handle_training_job(db: Session, job: Job) -> None:
         job.status = FAILED
         job.error_message = f"학습 프로세스가 실패했습니다. 종료 코드: {result.exit_code}"
         db.commit()
+        notify_training_finished(db, run, "training_failed")
         return
 
     if not result.results_csv_path.is_file():
@@ -158,6 +248,7 @@ def handle_training_job(db: Session, job: Job) -> None:
         job.status = FAILED
         job.error_message = "학습 결과 파일을 찾을 수 없습니다."
         db.commit()
+        notify_training_finished(db, run, "training_failed")
         return
 
     best_weight_path = result.run_dir / "weights" / "best.pt"
@@ -168,6 +259,7 @@ def handle_training_job(db: Session, job: Job) -> None:
         job.status = FAILED
         job.error_message = "학습 모델 아티팩트 파일을 찾을 수 없습니다."
         db.commit()
+        notify_training_finished(db, run, "training_failed")
         return
 
     try:
@@ -193,6 +285,7 @@ def handle_training_job(db: Session, job: Job) -> None:
         job.status = COMPLETED
         job.error_message = None
         db.commit()
+        notify_training_finished(db, run, "training_completed")
     except Exception as exc:
         db.rollback()
         run = db.get(TrainingRun, run.id)
@@ -206,6 +299,8 @@ def handle_training_job(db: Session, job: Job) -> None:
             job.status = FAILED
             job.error_message = str(exc) or "학습 결과 처리에 실패했습니다."
         db.commit()
+        if run is not None:
+            notify_training_finished(db, run, "training_failed")
 
 
 JOB_HANDLERS["training"] = handle_training_job
@@ -493,6 +588,7 @@ def handle_inference_job(db: Session, job: Job) -> None:
         job.status = FAILED
         job.error_message = "추론에 사용할 모델 아티팩트를 찾을 수 없습니다."
         db.commit()
+        notify_inference_finished(db, run, "inference_failed")
         return
 
     now = datetime.now(timezone.utc)
@@ -523,6 +619,7 @@ def handle_inference_job(db: Session, job: Job) -> None:
         else:
             job.error_message = str(exc) or "추론 실행에 실패했습니다."
         db.commit()
+        notify_inference_finished(db, run, "inference_failed")
         return
 
     run.output_path = str(result.output_dir)
@@ -532,6 +629,7 @@ def handle_inference_job(db: Session, job: Job) -> None:
         job.status = FAILED
         job.error_message = f"추론 프로세스가 실패했습니다. 종료 코드: {result.exit_code}"
         db.commit()
+        notify_inference_finished(db, run, "inference_failed")
         return
 
     try:
@@ -547,6 +645,7 @@ def handle_inference_job(db: Session, job: Job) -> None:
         job.status = COMPLETED
         job.error_message = None
         db.commit()
+        notify_inference_finished(db, run, "inference_completed")
     except Exception as exc:
         db.rollback()
         run = db.get(InferenceRun, run.id)
@@ -559,6 +658,8 @@ def handle_inference_job(db: Session, job: Job) -> None:
             job.status = FAILED
             job.error_message = str(exc) or "추론 결과 처리에 실패했습니다."
         db.commit()
+        if run is not None:
+            notify_inference_finished(db, run, "inference_failed")
 
 
 JOB_HANDLERS["inference"] = handle_inference_job
