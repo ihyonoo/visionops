@@ -67,9 +67,21 @@ def summarize_metrics(rows: list[dict]) -> dict:
         "best_mAP50": ("metrics/mAP50(B)", "metrics/mAP50", "mAP50"),
         "best_precision": ("metrics/precision(B)", "metrics/precision", "precision"),
         "best_recall": ("metrics/recall(B)", "metrics/recall", "recall"),
+        "best_accuracy_top1": ("metrics/accuracy_top1", "accuracy_top1"),
+        "best_accuracy_top5": ("metrics/accuracy_top5", "accuracy_top5"),
     }
     for output_key, candidates in metric_map.items():
         value = _best_numeric(rows, candidates)
         if value is not None:
+            summary[output_key] = value
+
+    last_row = rows[-1]
+    loss_map = {
+        "last_val_loss": "val/loss",
+        "last_train_loss": "train/loss",
+    }
+    for output_key, source_key in loss_map.items():
+        value = last_row.get(source_key)
+        if isinstance(value, int | float):
             summary[output_key] = value
     return summary

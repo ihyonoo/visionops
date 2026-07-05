@@ -92,6 +92,21 @@ def test_build_yolo_train_command_resolves_project_path(tmp_path, monkeypatch):
     assert f"project={tmp_path / 'relative-runs'}" in command
 
 
+def test_build_yolo_train_command_supports_classification_task(tmp_path):
+    command = build_yolo_train_command(
+        task_type="classification",
+        model_name="yolo11x-cls",
+        data_path=tmp_path / "split",
+        config={"epochs": 5, "imgsz": 224, "batch": 8, "device": "cpu"},
+        run_parent=tmp_path / "runs",
+        run_name="cls-run",
+    )
+
+    assert command[:4] == ["yolo", "classify", "train", "model=yolo11x-cls.pt"]
+    assert f"data={tmp_path / 'split'}" in command
+    assert f"project={tmp_path / 'runs'}" in command
+
+
 def test_run_yolo_training_writes_stdout_log_and_returns_success(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     _write_fake_yolo(bin_dir)
@@ -144,3 +159,21 @@ def test_metrics_parser_summarizes_last_epoch_and_best_values(tmp_path):
         "best_precision": 0.40,
         "best_recall": 0.60,
     }
+
+
+def test_metrics_parser_summarizes_classification_accuracy(tmp_path):
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "epoch, train/loss, val/loss, metrics/accuracy_top1, metrics/accuracy_top5\n"
+        "0,1.2,1.1,0.70,0.91\n"
+        "1,0.8,0.7,0.82,0.96\n",
+        encoding="utf-8",
+    )
+
+    rows = read_results_csv(csv_path)
+    summary = summarize_metrics(rows)
+
+    assert summary["last_epoch"] == 1
+    assert summary["best_accuracy_top1"] == 0.82
+    assert summary["best_accuracy_top5"] == 0.96
+    assert summary["last_val_loss"] == 0.7

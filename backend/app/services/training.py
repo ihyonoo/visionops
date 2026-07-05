@@ -69,20 +69,26 @@ def _training_config_args(config: Mapping[str, Any]) -> list[str]:
 def build_yolo_train_command(
     *,
     yolo_executable: str = "yolo",
+    task_type: str = "detection",
     model_name: str,
-    data_yaml_path: Path,
+    data_path: Path | None = None,
+    data_yaml_path: Path | None = None,
     config: Mapping[str, Any],
     run_parent: Path,
     run_name: str,
 ) -> list[str]:
     run_parent = run_parent.resolve()
-    data_yaml_path = data_yaml_path.resolve()
+    resolved_data_path = data_path or data_yaml_path
+    if resolved_data_path is None:
+        raise ValueError("data_path is required")
+    resolved_data_path = resolved_data_path.resolve()
+    task_command = "classify" if task_type == "classification" else "detect"
     return [
         yolo_executable,
-        "detect",
+        task_command,
         "train",
         f"model={_model_weight_name(model_name)}",
-        f"data={data_yaml_path}",
+        f"data={resolved_data_path}",
         *_training_config_args(config),
         f"project={run_parent}",
         f"name={run_name}",
@@ -92,8 +98,10 @@ def build_yolo_train_command(
 
 def run_yolo_training(
     *,
+    task_type: str = "detection",
     model_name: str,
-    data_yaml_path: Path,
+    data_path: Path | None = None,
+    data_yaml_path: Path | None = None,
     config: Mapping[str, Any],
     run_parent: Path,
     run_name: str,
@@ -107,7 +115,9 @@ def run_yolo_training(
     stdout_log_path = log_dir / "stdout.log"
     command = build_yolo_train_command(
         yolo_executable=yolo_executable or runtime_yolo_executable(),
+        task_type=task_type,
         model_name=model_name,
+        data_path=data_path,
         data_yaml_path=data_yaml_path,
         config=config,
         run_parent=run_parent,
